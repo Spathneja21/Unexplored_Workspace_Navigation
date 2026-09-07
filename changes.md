@@ -212,3 +212,154 @@ NUC, then verify:
   under `xslocobot_control.launch`'s `use_lidar` branch).
 - Driving around visibly grows the map in rviz.
 - `map_saver` against `/locobot/rtabmap/grid_map` produces a sane `.pgm`.
+
+---
+
+## Step 4 — First hardware test: robot did not move (2026-09-07)
+
+### Symptom
+`rosrun uan_base_control velocity_publisher.py -z 0.5 -t 5` ran cleanly and
+logged `driving ... z=0.500 rad/s` then `stopped`, but the base never turned.
+
+### Diagnosis: the Create3's ROS 2 stack is not on the DDS network
+
+**The publishing script is not at fault.** The `ros1_bridge` advertises every
+`/mobile_base/*` topic on *both* the ROS 1 and ROS 2 sides, so `rostopic list`
+looks completely healthy while nothing is behind the topics.
+
+Evidence gathered:
+
+| Check | Result |
+| --- | --- |
+| `rostopic info /mobile_base/cmd_vel` | Publisher **and** subscriber are both `/ros_bridge` — the bridge is talking to itself |
+| `rostopic echo -n 1 /mobile_base/odom` | Timed out, **zero** messages in 8 s — the base is silent, not merely refusing to drive |
+| `ros2 node list --no-daemon` | Only `/ros_bridge`. The Create3's own node is **absent** |
+| `ros2 topic info /mobile_base/odom --verbose` | Sole publisher is `ros_bridge` |
+
+The odom result is the important one: it rules out the Step 1 caveats
+(docked / hazard reflexes / kidnap). Those would block motion while odom kept
+flowing. Nothing is flowing, so the base is not connected at all.
+
+### Ruled out
+- **Network** — `192.168.186.2` pings, 0% loss. NUC is `192.168.186.3/24` on `eno1`.
+- **ROS Domain ID** — `0` on both sides (Create3 `/ros-config` shows `value="0"`).
+- **RMW** — `rmw_fastrtps_cpp` on both (`~/.bashrc:129,151`; Create3 has it `selected`).
+- **Namespace** — Create3 set to `/mobile_base`, matching `bridge.yaml`.
+- **RMW profile override** — the Create3's override textarea is empty, so its
+  default XML profile is in use.
+- **Stale `ros2` daemon cache** — re-queried with `--no-daemon`, same result.
+
+Create3 firmware: **G.5.3**, ROS 2 Galactic. Config genuinely matches on both
+ends, which points at the robot's application not running rather than a
+misconfiguration.
+
+### Suspicious finding (not yet confirmed as the cause)
+On the Create3 `/ros-config` page, the Fast DDS discovery server address field
+contains a stale `10.36.209.237:11811` — an address on a **different subnet**,
+left over from another network. The placeholder shows the correct
+`192.168.186.3:11811`.
+
+The `fast_discovery_server_enabled` checkbox renders **without** a `checked`
+attribute, so it reads as disabled and the stale value should be inert. This
+could not be fully confirmed from markup alone and **needs visual confirmation
+in a browser**. If that box is actually ticked, it alone explains the whole
+failure — the base would be trying to reach a discovery server on an
+unreachable subnet.
+
+### Recommended fix sequence (given to user, not yet applied)
+1. **Wake the robot.** The Create3 sleeps when docked and idle and its ROS 2
+   stack goes down with it. The web server runs on a separate processor and
+   stays up regardless — which is why the config pages responded normally
+   throughout this diagnosis. Press a button on the base or undock it.
+2. If still absent: `http://192.168.186.2` → **Application → Restart
+   application**, wait ~30 s. **Reboot robot** as fallback.
+3. Clear the stale discovery-server address and confirm the checkbox is
+   unchecked; Save, then restart the application.
+
+Nothing was changed on the robot — all fixes are physical/web-UI actions for
+the user to perform.
+
+### Reusable lesson
+`rostopic list` is **not** a liveness check on this platform; the bridge
+advertises topics whether or not the base is connected. Use
+`rostopic hz /mobile_base/odom` as the pre-flight check before any drive
+command. If odom isn't flowing, no `cmd_vel` will ever work.
+
+### Still open
+Hardware motion test still unverified. Lidar still unplugged.
+
+---
+
+## Step 5 — Remote operation over SSH (2026-09-07)
+
+### Goal
+Drive the whole project from a laptop over SSH instead of a monitor plugged
+into the NUC.
+
+### NUC state surveyed (nothing changed yet)
+
+| Item | Value |
+| --- | --- |
+| SSH server | installed, `enabled` + `active`, listening `0.0.0.0:22` and `[::]:22` |
+| SSH user | `locobot` |
+| Hostname | `locobot`; avahi-daemon active, `locobot.local` resolves |
+| `X11Forwarding` | `yes` in `/etc/ssh/sshd_config` (RViz over SSH will work) |
+| Password auth | default (enabled); `~/.ssh/authorized_keys` does **not** exist yet |
+| `tmux` / `screen` / `byobu` | **none installed**; tmux candidate `3.0a-2ubuntu0.4` |
+| Internet | reachable (apt install will work) |
+
+### Key finding: the WiFi IP is not stable
+`wlp0s20f3` changed address **within this session**:
+
+- During Step 4 diagnosis: `172.31.249.247/22`
+- During Step 5 survey: `10.166.124.85/24`, SSID **"Samsung S23 FE"** (a phone hotspot)
+
+So the NUC hops networks and takes a new DHCP lease each time. Consequences:
+- Any SSH command using a hard-coded WiFi IP will break without warning.
+- Prefer `locobot.local` (mDNS via avahi, verified working) over a raw IP.
+- For reliable work the NUC and laptop should sit on one stable network, ideally
+  a real router rather than a phone hotspot.
+
+`eno1` at `192.168.186.3/24` is the **wired link to the Create3 base** and is a
+separate private subnet — it is not the way in from the laptop, and must not be
+reconfigured.
+
+### Design decision: run ROS entirely on the NUC
+The laptop is used as a **terminal only**. No ROS install, no `ROS_MASTER_URI`
+edits, no multi-machine ROS setup on the laptop.
+
+**Why:** `ROS_IP` is pinned to `192.168.186.3` (the Create3 subnet) and
+`ROS_MASTER_URI` to `http://localhost:11311`. Both are correct for
+NUC-local operation and already work. Making the laptop a ROS node would mean
+rewriting both on every network change, and the laptop cannot reach the
+`192.168.186.x` base subnet anyway. Keeping ROS wholly on the NUC sidesteps all
+of it.
+
+### Safety note recorded for the operator
+`tmux` sessions survive an SSH disconnect — that is exactly why bringup belongs
+in one, and exactly why **teleop does not**:
+
+- `teleop_keyboard.py` holds its last velocity and republishes at 20 Hz. Inside
+  tmux, an SSH drop leaves it running and **the robot keeps driving**.
+- Run outside tmux, an SSH drop sends SIGHUP, Python exits without running the
+  `finally` block, `cmd_vel` goes stale, and the **Create3 watchdog halts the
+  base**. This is the safe failure mode.
+
+`velocity_publisher.py` is inherently safer either way since it is bounded by
+its `-t` duration.
+
+**Corollary learned the hard way (Step 4 → Step 5 transition):** the same
+SIGHUP risk hit `git` itself — an SSH drop mid-`commit`/`pull` (no tmux
+installed yet) truncated several working-tree files to 0 bytes and corrupted
+local git objects. Reinforces #1 below: install tmux and run *any* foreground
+command that matters (not just teleop) inside it.
+
+### Actions required of the user (not applied — need sudo/laptop access)
+1. `sudo apt install -y tmux` on the NUC.
+2. Generate an SSH key on the laptop and `ssh-copy-id locobot@locobot.local`.
+3. Put both machines on the same stable network.
+
+### Still open
+Hardware motion test still unverified (Step 4 Create3 discovery issue is
+unresolved). Lidar now connected (Step 3); SLAM launch (`uan_slam.launch`)
+not yet run on hardware. tmux not yet installed — see corollary above.

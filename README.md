@@ -16,6 +16,12 @@ Every step of this project is logged in [changes.md](changes.md).
 `reference/` is **not** a catkin source tree. The Interbotix packages are used
 from the already-built `/home/locobot/interbotix_ws`; see changes.md for why.
 
+## to use the ssh 
+
+conda deactivate
+ssh locobot@locobot.local
+cd UAN/Unexplored_Workspace_Navigation/
+
 ## Setup (once per new terminal)
 
 ```bash
