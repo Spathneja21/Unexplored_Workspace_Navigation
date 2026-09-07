@@ -1,0 +1,14 @@
+# Velocity limits and defaults for the UAN base controller.
+# The Create3 base itself caps at ~0.46 m/s and ~1.9 rad/s; keep well below that
+# indoors so the hazard reflexes have time to act.
+
+cmd_vel_topic: /mobile_base/cmd_vel
+odom_topic: /mobile_base/odom
+
+publish_rate: 20.0        # Hz - Create3 stops if cmd_vel goes stale
+
+max_linear_x: 0.30        # m/s
+max_angular_z: 1.00       # rad/s
+
+default_linear_step: 0.05   # m/s per keypress (teleop)
+default_angular_step: 0.20  # rad/s per keypress (teleop)

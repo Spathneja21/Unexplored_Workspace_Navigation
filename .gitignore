@@ -1,0 +1,6 @@
+uan_ws/build/
+uan_ws/devel/
+uan_ws/install/
+uan_ws/src/CMakeLists.txt
+__pycache__/
+*.pyc

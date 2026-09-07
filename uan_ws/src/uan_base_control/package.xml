@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>uan_base_control</name>
+  <version>0.0.1</version>
+  <description>Base velocity control for the Unexplored Area Navigation project (LoCoBot WX200, Create3 base).</description>
+  <maintainer email="shubhampathneja123@gmail.com">Shubham Pathneja</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>interbotix_xslocobot_control</exec_depend>
+
+  <export/>
+</package>
