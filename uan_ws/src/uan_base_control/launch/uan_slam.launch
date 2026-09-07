@@ -1,0 +1,27 @@
+<launch>
+  <!--
+    UAN SLAM: builds a map of the current room with the lidar + RGBD camera.
+
+    Wraps interbotix_xslocobot_nav/xslocobot_nav.launch (system workspace),
+    which under the hood runs rtabmap (RGBD+lidar SLAM) and move_base. There
+    is no separate "slam-only" vendor launch file - mapping is just this file
+    run with localization:=false (the default), which is what we want here.
+    A copy is kept in ../../../reference/ for reading only.
+
+    NOTE: this launch always turns the RealSense camera on too
+    (xslocobot_nav.launch hardcodes use_camera:=true) - rtabmap fuses camera
+    + lidar, it isn't a lidar-only SLAM stack.
+  -->
+
+  <arg name="robot_model" default="locobot_wx200"/>
+  <arg name="robot_name"  default="locobot"/>
+  <arg name="use_rviz"    default="true"/>
+
+  <include file="$(find interbotix_xslocobot_nav)/launch/xslocobot_nav.launch">
+    <arg name="robot_model" value="$(arg robot_model)"/>
+    <arg name="robot_name"  value="$(arg robot_name)"/>
+    <arg name="use_lidar"   value="true"/>
+    <arg name="use_rviz"    value="$(arg use_rviz)"/>
+  </include>
+
+</launch>
