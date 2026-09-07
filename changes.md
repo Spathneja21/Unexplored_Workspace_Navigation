@@ -163,3 +163,52 @@ comment at the top of the file.
 
 ### Still open from Step 1
 Hardware motion test has **not** been run yet. Lidar still unplugged.
+
+---
+
+## Step 3 — SLAM mapping via lidar (2026-09-07)
+
+### Goal
+Use the now-connected RPLidar to build a map of a room.
+
+### Platform facts established
+Discovered by inspecting the NUC over SSH:
+
+| Item | Value |
+| --- | --- |
+| Lidar | now connected, `/dev/rplidar -> ttyUSB1` |
+| SLAM package | `interbotix_xslocobot_nav` at `interbotix_ros_rovers/interbotix_ros_xslocobots/interbotix_xslocobot_nav` (note: `xslocobots` plural, not `xslocobot` as guessed from the Step 1 vendor path for the control package) |
+| SLAM launch file | `xslocobot_nav.launch` — there is no separate slam-only file |
+| SLAM engine | **rtabmap** (RGBD camera + lidar fused), not gmapping/slam_toolbox |
+| Occupancy grid topic | `/<robot_name>/rtabmap/grid_map` (what `move_base`'s `map` topic is remapped to) |
+
+### Design decision: one wrapper launch, reuse rtabmap as-is
+`xslocobot_nav.launch` hardcodes `use_camera:=true` — rtabmap needs the RGBD
+camera alongside the lidar scan, it isn't a lidar-only stack. Mapping vs.
+localization is just the `localization` arg (default `false` = build a new
+map), so no separate "SLAM mode" file was needed — `uan_slam.launch` just
+sets `use_lidar:=true` and passes through.
+
+### Files created
+- **`uan_ws/src/uan_base_control/launch/uan_slam.launch`** — wraps
+  `interbotix_xslocobot_nav/xslocobot_nav.launch` with `use_lidar:=true`.
+  Exposes `robot_model`, `robot_name`, `use_rviz`.
+- **`reference/interbotix_xslocobot_nav/launch/xslocobot_nav.launch`** —
+  read-only copy of the vendor launch file, same rationale as the
+  `interbotix_xslocobot_control` copy from Step 1. The referenced costmap/
+  planner config YAMLs were **not** copied — nothing in our own launch reads
+  them, so there'd be nothing to check them against; add if that changes.
+- **README.md** — new "Mapping (SLAM)" section: how to launch, drive around
+  to cover the room, and save the map with `map_server`'s `map_saver`
+  against the `rtabmap/grid_map` topic.
+
+### Not yet verified on hardware
+This step was written from the laptop copy of the repo (not over the SSH
+session) and has **not been launched yet**. Push to GitHub, pull onto the
+NUC, then verify:
+- `roslaunch uan_base_control uan_slam.launch` comes up clean (camera +
+  lidar + rtabmap + move_base, no missing-package errors).
+- `/locobot/scan` is actually being published (confirms rplidar node started
+  under `xslocobot_control.launch`'s `use_lidar` branch).
+- Driving around visibly grows the map in rviz.
+- `map_saver` against `/locobot/rtabmap/grid_map` produces a sane `.pgm`.
