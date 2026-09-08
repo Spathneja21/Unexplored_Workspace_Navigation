@@ -363,3 +363,77 @@ command that matters (not just teleop) inside it.
 Hardware motion test still unverified (Step 4 Create3 discovery issue is
 unresolved). Lidar now connected (Step 3); SLAM launch (`uan_slam.launch`)
 not yet run on hardware. tmux not yet installed — see corollary above.
+
+---
+
+## Step 6 — Run rviz on the laptop instead of over X11 (2026-09-08)
+
+### Goal
+`uan_slam.launch` was run successfully with the lidar producing a real map,
+but viewing it via `rosrun rviz rviz` over SSH `-X` forwarding was too slow
+to be usable — X11 forwarding renders remotely and streams raw pixels over
+WiFi, so a laptop's GPU is never actually used.
+
+### Design decision: native ROS multi-machine rviz, not remote desktop
+ROS already supports running a node on a separate machine against a remote
+`roscore` via `ROS_MASTER_URI`/`ROS_IP` — this is the built-in mechanism for
+exactly this, not a new tool or extra infra (no VNC, no streaming). rviz then
+renders locally on the laptop's own GPU and only topic data (map + scan,
+both small) crosses the network.
+
+**Why not make the laptop a full ROS participant generally?** Step 5 already
+decided against that for the whole stack, because `ROS_IP` would need
+updating on every WiFi hop. That reasoning still holds for `cmd_vel`/bringup.
+But running rviz alone as a temporary remote subscriber doesn't have that
+cost — if the laptop's IP changes, only rviz needs restarting, not the whole
+SLAM/base stack.
+
+### Requirement discovered: `ROS_IP` must match the reachable interface
+Confirmed reachability first (bidirectional `ping` between laptop and
+`locobot.local` — both worked, same `172.27.244.x` subnet). But
+`rostopic list` from the laptop still failed with "Unable to communicate
+with master", and `curl http://locobot.local:11311/` returned **connection
+refused** (not a timeout) — meaning nothing was listening on that port on
+the WiFi interface at all.
+
+Root cause: the NUC's `.bashrc` pins `ROS_IP=192.168.186.3` (the **wired**
+Create3 subnet, per Step 1). `roscore`'s XML-RPC/TCPROS servers bind to
+whatever `ROS_IP` says at process start, so it was only listening on the
+wired interface — invisible to anything on WiFi, laptop included.
+
+**Fix applied — session-scoped, not a `.bashrc` change:** relaunched with
+`ROS_IP` overridden just for that process:
+
+```bash
+ROS_IP=172.27.244.85 roslaunch uan_base_control uan_slam.launch
+```
+
+This keeps the `.bashrc` default (needed for normal Create3/base operation)
+untouched, at the cost of needing to redo this override — and re-export
+`ROS_IP` on the laptop side too — any time the NUC's WiFi IP changes
+(already a known instability from Step 5).
+
+### Laptop-side setup
+ROS Noetic (including `ros-noetic-rviz`) was already installed on the
+laptop from an earlier unrelated setup — nothing new to install.
+
+```bash
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://locobot.local:11311
+export ROS_IP=<laptop's LAN IP, e.g. 172.27.244.134>
+rostopic list          # sanity check — should list /locobot/scan, /locobot/rtabmap/grid_map, etc.
+rosrun rviz rviz -f map
+```
+Displays added: `Map` on `/locobot/rtabmap/grid_map`, `LaserScan` on
+`/locobot/scan`.
+
+### Verification performed
+- `rostopic list` from the laptop returned the full NUC topic list after the
+  `ROS_IP` override.
+- rviz on the laptop rendered the live map smoothly, confirming the
+  bottleneck was X11 forwarding, not rviz/rtabmap performance itself.
+
+### Still open
+Same as Step 5 (Create3 discovery issue, tmux). Additionally: this rviz
+setup is per-session — both the NUC's launch-time `ROS_IP` override and the
+laptop's exported env vars need to be redone if either machine's IP changes.

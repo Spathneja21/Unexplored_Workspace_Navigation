@@ -97,3 +97,34 @@ rosrun map_server map_saver -f ~/maps/my_room map:=/locobot/rtabmap/grid_map
 `maps/` is gitignored (see changes.md Step 2) - the `.pgm`/`.yaml` pair are
 run artifacts, save them outside the repo (as above) or use `git add -f` if
 one needs to be committed as a reference map.
+
+## Viewing rviz on your laptop (not over SSH -X)
+
+SSH X11 forwarding renders rviz remotely and streams pixels - too slow for
+the 3D map view. Instead run rviz natively on the laptop as a normal ROS
+node against the NUC's `roscore`; see changes.md Step 6 for why this needs
+a `ROS_IP` override on the NUC side.
+
+**On the locobot** — relaunch SLAM with `ROS_IP` bound to its WiFi interface
+(find it with `hostname -I`), not the wired Create3 subnet the `.bashrc`
+default points to:
+
+```bash
+ROS_IP=<nuc's WiFi IP> roslaunch uan_base_control uan_slam.launch
+```
+
+**On the laptop** (requires `ros-noetic-rviz` installed locally):
+
+```bash
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://locobot.local:11311
+export ROS_IP=<laptop's LAN IP>
+rostopic list          # confirm you see /locobot/scan, /locobot/rtabmap/grid_map, ...
+rosrun rviz rviz -f map
+```
+
+Add displays: **Map** on `/locobot/rtabmap/grid_map`, **LaserScan** on
+`/locobot/scan`.
+
+If either machine's IP changes mid-session, redo both the NUC relaunch and
+the laptop's `export`s with the new IPs.
