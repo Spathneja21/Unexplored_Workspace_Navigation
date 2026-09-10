@@ -32,9 +32,7 @@ log/
 # --- generated maps ----------------------------------------------------------
 # gmapping/SLAM output. The .pgm is the occupancy image and its .yaml is just a
 # pointer to it — both are run artifacts, not config.
-maps/
-*.pgm
-*.pbstream
+
 
 # --- recorded data & results -------------------------------------------------
 # Odometry / cmd_vel traces and anything else a run spits out.
