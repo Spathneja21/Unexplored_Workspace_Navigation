@@ -35,6 +35,9 @@
     <param name="base_frame_id"   value="$(arg robot_name)/base_footprint"/>
     <param name="odom_frame_id"   value="$(arg robot_name)/odom"/>
     <param name="global_frame_id" value="map"/>
+    <!-- the Create3's ROS1<->ROS2 bridge adds a few ms of jitter to odom/tf
+         delivery; give amcl slack so it doesn't drop scans over it -->
+    <param name="transform_tolerance" value="0.5"/>
   </node>
 
   <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
