@@ -1,0 +1,29 @@
+<launch>
+  <!--
+    UAN localize: drive the robot around the room already mapped by
+    uan_slam.launch, using rviz "2D Nav Goal" clicks.
+
+    Same underlying launch as uan_slam.launch (interbotix_xslocobot_nav/
+    xslocobot_nav.launch), just with localization:=true. That switches
+    rtabmap from building a new map to localizing against the existing
+    ~/.ros/rtabmap.db - the same database uan_slam.launch's map was saved
+    from - instead of standing up a separate map_server/amcl stack to
+    reload the exported .pgm/.yaml.
+
+    Requires uan_slam.launch to have been run at least once already, so
+    ~/.ros/rtabmap.db exists and has a real map in it.
+  -->
+
+  <arg name="robot_model" default="locobot_wx200"/>
+  <arg name="robot_name"  default="locobot"/>
+  <arg name="use_rviz"    default="true"/>
+
+  <include file="$(find interbotix_xslocobot_nav)/launch/xslocobot_nav.launch">
+    <arg name="robot_model"   value="$(arg robot_model)"/>
+    <arg name="robot_name"    value="$(arg robot_name)"/>
+    <arg name="use_lidar"     value="true"/>
+    <arg name="use_rviz"      value="$(arg use_rviz)"/>
+    <arg name="localization"  value="true"/>
+  </include>
+
+</launch>

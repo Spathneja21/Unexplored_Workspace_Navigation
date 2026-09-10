@@ -128,3 +128,32 @@ Add displays: **Map** on `/locobot/rtabmap/grid_map`, **LaserScan** on
 
 If either machine's IP changes mid-session, redo both the NUC relaunch and
 the laptop's `export`s with the new IPs.
+
+## Traversing a saved map
+
+Once a map exists (built via `uan_slam.launch` above, saved to `~/.ros/rtabmap.db`),
+drive the robot around it by clicking goals in rviz instead of teleop.
+
+**On the locobot:**
+
+```bash
+source /home/locobot/UAN/Unexplored_Workspace_Navigation/uan_ws/devel/setup.bash
+ROS_IP=<nuc's WiFi IP> roslaunch uan_base_control uan_localize.launch use_rviz:=false
+```
+
+**On the laptop** (same `ROS_MASTER_URI`/`ROS_IP` setup as the SLAM/rviz
+section above):
+
+```bash
+rosrun rviz rviz -f map
+```
+
+Add displays: **Map** on `/locobot/rtabmap/grid_map`, **LaserScan** on
+`/locobot/scan`. Then use rviz's **2D Nav Goal** toolbar button, click a
+point on the map — `move_base` (already running inside this launch) drives
+the robot there.
+
+This reuses the same `rtabmap.db` the map was built from, rather than
+reloading the exported `.pgm`/`.yaml` through a separate `map_server`/`amcl`
+stack - `localization:=true` just tells rtabmap to stop extending the map
+and instead localize the robot against what's already there.

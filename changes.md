@@ -437,3 +437,43 @@ Displays added: `Map` on `/locobot/rtabmap/grid_map`, `LaserScan` on
 Same as Step 5 (Create3 discovery issue, tmux). Additionally: this rviz
 setup is per-session — both the NUC's launch-time `ROS_IP` override and the
 laptop's exported env vars need to be redone if either machine's IP changes.
+
+---
+
+## Step 7 — Navigate a saved map (2026-09-10)
+
+### Goal
+After successfully building a map with `uan_slam.launch` and saving it
+(`map_saver` against `/locobot/rtabmap/grid_map` → `my_room.pgm`/`.yaml`),
+drive the robot around that map by clicking goals in rviz instead of
+teleop.
+
+### Design decision: reuse rtabmap's own database, not map_server + amcl
+The obvious ROS-standard approach is `map_server` (republish the saved
+`.pgm`) + `amcl` (localize against it) + `move_base`. Went with something
+smaller instead: `xslocobot_nav.launch` (already wrapped by
+`uan_slam.launch`) has a `localization` arg. Setting it `true` switches
+rtabmap from *building* the map to *localizing* against the same
+`~/.ros/rtabmap.db` the `.pgm` was exported from, and `move_base` is
+already wired into that same launch.
+
+**Why:** the `.pgm`/`.yaml` pair is just a flattened snapshot export — the
+database is rtabmap's actual source of truth. Standing up `map_server` +
+`amcl` would mean a second, independent localization stack duplicating what
+rtabmap already does, for no benefit unless the database itself were lost
+and only the exported map remained.
+
+### Files created
+- **`uan_ws/src/uan_base_control/launch/uan_localize.launch`** — same wrap
+  as `uan_slam.launch`, with `localization:=true` added. Requires
+  `uan_slam.launch` to have been run at least once already (needs a
+  populated `~/.ros/rtabmap.db`).
+- **README.md** — new "Traversing a saved map" section: launch + rviz Map/
+  LaserScan displays + using the **2D Nav Goal** toolbar button.
+
+### Not yet verified on hardware
+Written from the laptop copy, not tested on the robot yet. Verify:
+- `uan_localize.launch` comes up without rebuilding the map (mapping should
+  stay frozen, not keep extending).
+- A rviz "2D Nav Goal" click actually results in `move_base` driving the
+  base via `/mobile_base/cmd_vel`.
