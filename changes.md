@@ -477,3 +477,67 @@ Written from the laptop copy, not tested on the robot yet. Verify:
   stay frozen, not keep extending).
 - A rviz "2D Nav Goal" click actually results in `move_base` driving the
   base via `/mobile_base/cmd_vel`.
+
+### Update: verified on hardware, plus fixes discovered running it live
+`uan_localize.launch` worked (map + trajectory visible in rviz), but three
+follow-on issues showed up in actual use:
+
+**RobotModel didn't render** — rviz's RobotModel display defaults to the
+param name `robot_description`, but `robot_state_publisher` here runs under
+`/locobot`, so the real param is `/locobot/robot_description`. Fix: set the
+display's **Robot Description** field explicitly.
+
+**rviz's click tools silently went nowhere** — `2D Pose Estimate` and
+`2D Nav Goal` default to unnamespaced topics (`initialpose`,
+`move_base_simple/goal`), but `xslocobot_nav.launch` remaps rtabmap's
+initialpose subscription to `/locobot/initialpose`, and `move_base` runs
+under the `/locobot` namespace. Without repointing both tools via
+**Panels → Tool Properties**, clicks in rviz do nothing. This matters
+because localization needs a manually-seeded pose after `uan_localize.launch`
+starts — rtabmap doesn't know where the robot currently is until told, so
+the shown position can be arbitrarily wrong (offset from the real robot)
+until either a `2D Pose Estimate` click seeds it or enough matching
+scan/visual data accumulates on its own.
+
+**An added `Odometry` display on `/mobile_base/odom` showed a TF error, not
+a bug** — that topic's message frame is plain `odom`, while this stack's TF
+tree uses `locobot/odom` (the Create3 bridge and the Interbotix stack don't
+share frame naming). Not worth reconciling for a display that duplicates
+what `Pose`/`Trajectory` already show; just don't add it.
+
+### README updated
+"Traversing a saved map" section expanded with the concrete rviz display
+list (Map, LaserScan, RobotModel with the corrected param, Pose pointed at
+`/locobot/rtabmap/localization_pose`) and the Tool Properties topic fixes,
+plus the localize → seed pose → send goal sequence.
+
+---
+
+## Step 8 — Camera pan/tilt control (2026-09-10)
+
+### Goal
+Move the RealSense's pan/tilt mount independently of the automatic tilt
+`xslocobot_nav.launch` already does at startup.
+
+### How it works
+Standard Interbotix `JointGroupCommand` topic, position-controlled, same
+mechanism as the `camera_tilt` node already inside `xslocobot_nav.launch`.
+Confirmed from `reference/interbotix_xslocobot_control/config/locobot_wx200.yaml`:
+the `camera` joint group is `[pan, tilt]`, in radians.
+
+```bash
+rostopic pub -1 /locobot/commands/joint_group interbotix_xs_msgs/JointGroupCommand "{name: 'camera', cmd: [0.0, 0.3]}"
+```
+
+### Verification performed
+Published `cmd: [0.0, 0.3]`, then read back `/locobot/joint_states`:
+`tilt` position came back `0.2991` (matches command), `pan` `-0.0046`
+(untouched, consistent with commanding only tilt). Confirms positive tilt
+= looking down.
+
+Exact joint limits not checked against the URDF — README calls out moving
+in small increments (~±0.2-0.3 rad) rather than guessing large angles.
+
+### README updated
+New "Camera pan/tilt" section with the command, joint order/units, and how
+to read back current position via `/locobot/joint_states`.
