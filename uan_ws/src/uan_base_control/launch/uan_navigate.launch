@@ -1,0 +1,57 @@
+<launch>
+  <!--
+    UAN navigate: drive the robot around a previously saved map
+    (uan_ws/src/uan_base_control/maps/my_room.yaml) using rviz "2D Nav Goal"
+    clicks, via the standard map_server + amcl + move_base stack.
+
+    Distinct from uan_localize.launch (Step 7), which reuses rtabmap's own
+    database instead. That approach kept loading whichever rtabmap.db
+    happened to be on disk - inconsistent across sessions and hard to
+    reason about. This launch always loads the exact .pgm/.yaml pair
+    checked into the repo, so the map is deterministic.
+
+    No camera needed - amcl only needs the lidar scan + wheel odom, not
+    RGBD, so this also sidesteps the whole depth-camera dependency.
+  -->
+
+  <arg name="robot_model" default="locobot_wx200"/>
+  <arg name="robot_name"  default="locobot"/>
+  <arg name="use_rviz"    default="false"/>
+  <arg name="map_file"    default="$(find uan_base_control)/maps/my_room.yaml"/>
+
+  <!-- base + lidar only, no camera -->
+  <include file="$(find uan_base_control)/launch/uan_bringup.launch">
+    <arg name="robot_model" value="$(arg robot_model)"/>
+    <arg name="robot_name"  value="$(arg robot_name)"/>
+    <arg name="use_lidar"   value="true"/>
+    <arg name="use_camera"  value="false"/>
+    <arg name="use_rviz"    value="$(arg use_rviz)"/>
+  </include>
+
+  <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/>
+
+  <node name="amcl" pkg="amcl" type="amcl" output="screen">
+    <remap from="scan" to="/$(arg robot_name)/scan"/>
+    <param name="base_frame_id"   value="$(arg robot_name)/base_footprint"/>
+    <param name="odom_frame_id"   value="$(arg robot_name)/odom"/>
+    <param name="global_frame_id" value="map"/>
+  </node>
+
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <rosparam file="$(find interbotix_xslocobot_nav)/config/local_costmap_all_params.yaml" command="load"/>
+    <rosparam file="$(find interbotix_xslocobot_nav)/config/global_costmap_all_params.yaml" command="load"/>
+    <rosparam file="$(find interbotix_xslocobot_nav)/config/common_costmap_params.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find interbotix_xslocobot_nav)/config/common_costmap_params.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find interbotix_xslocobot_nav)/config/local_planner_params.yaml"  command="load"/>
+    <rosparam file="$(find interbotix_xslocobot_nav)/config/global_planner_params.yaml" command="load"/>
+    <rosparam file="$(find interbotix_xslocobot_nav)/config/move_base_params.yaml"      command="load"/>
+
+    <param name="global_costmap/robot_base_frame" value="$(arg robot_name)/base_footprint"/>
+    <param name="local_costmap/global_frame"      value="$(arg robot_name)/odom"/>
+    <param name="local_costmap/robot_base_frame"  value="$(arg robot_name)/base_footprint"/>
+
+    <remap from="cmd_vel" to="/mobile_base/cmd_vel"/>
+    <remap from="odom"    to="/mobile_base/odom"/>
+  </node>
+
+</launch>
