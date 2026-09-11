@@ -541,3 +541,79 @@ in small increments (~±0.2-0.3 rad) rather than guessing large angles.
 ### README updated
 New "Camera pan/tilt" section with the command, joint order/units, and how
 to read back current position via `/locobot/joint_states`.
+
+---
+
+## Step 9 — Deterministic navigation: map_server + amcl, supersedes Step 7 (2026-09-10/11)
+
+### Goal
+Step 7's `uan_localize.launch` (reusing rtabmap's own database) kept
+loading the wrong map in practice — whichever `rtabmap.db` happened to be
+on disk, which varied across sessions (fresh mapping runs, restored
+backups from the Step 6 stale-database incident, etc.). Needed a way to
+reliably load the *specific* saved map every time.
+
+### Design decision: standard map_server + amcl + move_base
+Went back to the ROS-standard approach considered and passed over in Step
+7: `map_server` republishes the exact `.pgm`/`.yaml` checked into the repo,
+`amcl` localizes against it using lidar scan + wheel odom, `move_base`
+plans/drives. Deterministic regardless of any rtabmap state, and drops the
+camera/RGBD dependency entirely — `amcl` doesn't need it.
+
+Bug found and fixed along the way: `my_room.yaml`'s `image:` field was a
+hardcoded **laptop** path (`/home/shubham/maps/my_room.pgm`) left over from
+wherever `map_saver` was run, which wouldn't resolve on the robot (`locobot`
+user, different home). Changed to a bare relative path (`my_room.pgm`) —
+`map_server` resolves relative image paths against the yaml's own directory.
+
+### Files created
+- **`uan_ws/src/uan_base_control/launch/uan_navigate.launch`** — base+lidar
+  bringup (no camera) + `map_server` (loading
+  `uan_ws/src/uan_base_control/maps/my_room.yaml`) + `amcl` + `move_base`
+  (reusing the same vendor costmap/planner config YAMLs as
+  `xslocobot_nav.launch`, since `move_base` isn't otherwise namespaced here).
+
+### Issue hit during testing: two launches running at once
+While debugging the "wrong map" symptom, found `uan_bringup.launch` and
+`uan_slam.launch` running simultaneously (from earlier, un-stopped
+sessions) — both bring up base/lidar/camera independently, risking
+duplicate/conflicting nodes. Not specific to this step, but worth a
+standing habit: `ps aux | grep -i roslaunch` before starting a new one.
+
+### amcl transform-extrapolation warnings — investigated, not a real fix needed
+Hit recurring `Failed to compute odom pose, skipping scan (...
+extrapolation ... into the future)` warnings. Tried adding
+`transform_tolerance` to `amcl` — **this did not help**; that param governs
+`amcl`'s own outgoing `map→odom` broadcast tolerance, not the internal
+scan-pose lookup that's actually failing, so it was the wrong lever
+(left in the launch file anyway since it's harmless, just ineffective for
+this).
+
+Actual assessment: scans arrive at 10Hz (confirmed from the rplidar
+driver's own startup log), and the warning recurs roughly every 1.3-1.6s —
+meaning only about 1 in every 13-16 scans is dropped, not most of them.
+Root cause is almost certainly the known Create3 ROS1↔ROS2 bridge latency
+jitter (documented since Step 4/5) occasionally landing a scan's timestamp
+a few ms ahead of the latest available tf. Low practical impact — `amcl`
+still updates from the large majority of scans. Decided not to chase this
+further unless it's shown to actually block navigation (a goal failing to
+plan/drive), rather than just being log noise.
+
+Separately noticed: `move_base`'s costmap plugins include a `depth_layer`
+subscribed to a `rtabmap/depth/...` topic that doesn't exist in this launch
+(no camera here) — harmless, just contributes nothing, an artifact of
+reusing the vendor's combined lidar+depth costmap config YAMLs as-is.
+
+### README updated
+"Traversing a saved map" section rewritten around `uan_navigate.launch`;
+`uan_localize.launch` marked superseded (kept in the repo, not deleted, but
+no longer the recommended path) with an explanation of why it was unreliable.
+rviz setup notes updated: `Map` display now points at global `/map` (not
+`/locobot/rtabmap/grid_map`), and rviz's click tools likely need **no**
+Tool Properties changes this time since `amcl`/`move_base` aren't
+namespaced under `/locobot` here — flagged to verify rather than assumed.
+
+### Not yet fully verified
+Whether `2D Pose Estimate`/`2D Nav Goal` actually work with rviz's default
+(unnamespaced) topics against this launch hasn't been confirmed hands-on —
+called out explicitly in the README rather than assumed.
