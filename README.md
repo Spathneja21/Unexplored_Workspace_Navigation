@@ -131,15 +131,31 @@ the laptop's `export`s with the new IPs.
 
 ## Traversing a saved map
 
-Once a map exists (built via `uan_slam.launch` above, saved to `~/.ros/rtabmap.db`),
+Once a map is saved (`uan_ws/src/uan_base_control/maps/my_room.pgm`/`.yaml`),
 drive the robot around it by clicking goals in rviz instead of teleop.
 
-**On the locobot:**
+Use **`uan_navigate.launch`** — it loads that exact `.pgm`/`.yaml` via
+`map_server` + `amcl` + `move_base`, so the map shown is always the one
+checked into the repo, deterministically.
+
+> `uan_localize.launch` (an earlier approach, reusing rtabmap's own
+> `~/.ros/rtabmap.db` instead of the exported `.pgm`) is **superseded** —
+> it kept loading whichever database happened to be on disk, which produced
+> a different/wrong-looking map depending on what had run most recently.
+> Kept in the repo for reference but `uan_navigate.launch` is the one to use.
+
+**On the locobot** — make sure nothing else (`uan_bringup.launch`,
+`uan_slam.launch`, another `uan_navigate.launch`) is already running first;
+running two base/lidar launches at once causes node conflicts:
 
 ```bash
+ps aux | grep -i roslaunch | grep -v grep   # confirm nothing else is up
 source /home/locobot/UAN/Unexplored_Workspace_Navigation/uan_ws/devel/setup.bash
-ROS_IP=<nuc's WiFi IP> roslaunch uan_base_control uan_localize.launch use_rviz:=false
+ROS_IP=172.27.244.85 roslaunch uan_base_control uan_navigate.launch
 ```
+
+No camera needed for this path — `amcl` only uses the lidar scan + wheel
+odom, not RGBD.
 
 **On the laptop** (same `ROS_MASTER_URI`/`ROS_IP` setup as the SLAM/rviz
 section above):
@@ -148,41 +164,31 @@ section above):
 rosrun rviz rviz -f map
 ```
 
-This reuses the same `rtabmap.db` the map was built from, rather than
-reloading the exported `.pgm`/`.yaml` through a separate `map_server`/`amcl`
-stack - `localization:=true` just tells rtabmap to stop extending the map
-and instead localize the robot against what's already there.
-
 ### rviz setup for navigating
 
 Add displays:
-- **Map** on `/locobot/rtabmap/grid_map`
+- **Map** on `/map` (global topic here, not `/locobot/rtabmap/grid_map` —
+  no rtabmap running in this path)
 - **LaserScan** on `/locobot/scan`
-- **RobotModel** — set its **Robot Description** field to `locobot/robot_description`
-  (not the default `robot_description`) since `robot_state_publisher` runs
-  under the `/locobot` namespace. Tick its checkbox to enable.
-- **Pose** — set its **Topic** to `/locobot/rtabmap/localization_pose`
-  (`geometry_msgs/PoseWithCovarianceStamped`) to see rtabmap's live
-  localization estimate as an arrow.
 
-Skip an **Odometry** display on `/mobile_base/odom` — its message frame is
-plain `odom` while this stack's TF tree uses `locobot/odom`, so it'll only
-show a TF error, not useful data.
-
-**rviz's click tools also need re-pointing**, since they default to
-unnamespaced topics that nothing here subscribes to. Open
-**Panels → Tool Properties**:
-- **2D Pose Estimate** → Topic → `/locobot/initialpose`
-- **2D Nav Goal** → Topic → `/locobot/move_base_simple/goal`
+`RobotModel` and camera-related displays aren't relevant here since no
+camera node is running. `2D Pose Estimate` and `2D Nav Goal` should work
+with rviz's **default** topics in this launch (`initialpose`,
+`move_base_simple/goal`) since neither `amcl` nor `move_base` are inside
+the `/locobot` namespace here — unlike the old `uan_localize.launch` path,
+no Tool Properties changes should be needed. Verify this before relying on
+it; if clicks don't do anything, check **Panels → Tool Properties** the
+same way as before.
 
 ### Localizing and driving to a goal
 
 1. **2D Pose Estimate**: click the toolbar button, then click-and-drag on
    the map at the robot's actual real-world position and facing direction.
-   This seeds rtabmap's localization — without it, the robot's shown
-   position can be arbitrarily wrong until enough matching scan/visual data
+   This seeds `amcl`'s localization — without it, the robot's shown
+   position can be arbitrarily wrong until enough matching scan data
    accumulates on its own.
-2. Confirm the RobotModel/Pose arrow settles onto the correct spot on the
+2. Confirm the pose (or RobotModel, if you add one back with the
+   `locobot/robot_description` param) settles onto the correct spot on the
    map.
 3. **2D Nav Goal**: click the toolbar button, then click-and-drag elsewhere
    on the map — the drag sets the final facing angle, not just the
@@ -192,6 +198,13 @@ unnamespaced topics that nothing here subscribes to. Open
 A goal inside mapped-obstacle space (black cells) or unmapped territory
 will be rejected rather than attempted — pick a point clearly in open
 (light gray) space, especially for the first try.
+
+You may see intermittent `amcl` warnings like `Failed to compute odom pose,
+skipping scan (... extrapolation ... into the future)` — this is a small,
+recurring timing race between the Create3 bridge's odom/tf delivery and the
+lidar's own scan timestamps (roughly 1 in every 13-16 scans at a 10Hz scan
+rate). It's cosmetic as long as goals still get planned and driven; only
+worth chasing further if navigation actually stalls.
 
 ## Camera pan/tilt
 
