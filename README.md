@@ -206,6 +206,84 @@ lidar's own scan timestamps (roughly 1 in every 13-16 scans at a 10Hz scan
 rate). It's cosmetic as long as goals still get planned and driven; only
 worth chasing further if navigation actually stalls.
 
+## Simulated navigation (no robot, laptop-only)
+
+For tracing a planned path (with the real robot mesh visible) on a map
+without connecting to the locobot at all — e.g. testing a new map like
+`hall.pgm` before ever driving the real robot there. Runs entirely on
+whatever machine launches it (tested on the laptop): `map_server` + the
+real robot model (via `interbotix_xslocobot_descriptions`, copied into
+`reference/`) fixed at a static position + `move_base` (global planner
+only — there's no real lidar/camera here, so obstacle avoidance only sees
+what's baked into the static map image).
+
+There's no Gazebo/physics simulator in this project — "simulation" here
+means move_base computing and showing a plan (with a robot mesh sitting on
+the map for context), not the robot actually moving anywhere.
+
+**Two known machine-specific gotchas, check both before debugging further:**
+1. **conda shadows `python3`.** If your shell prompt starts with `(base)`
+   (or another conda env), `python3`/pure-Python ROS nodes (`joint_state_publisher`,
+   `rostopic`, anything with a `python3` shebang) can silently fail with
+   `ModuleNotFoundError: No module named 'yaml'` — conda's Python doesn't
+   have the system's `python3-yaml` installed. Fix: `conda deactivate`
+   before sourcing ROS, or strip conda from `PATH` for that shell.
+2. **Two extra packages must be on `ROS_PACKAGE_PATH` before roslaunch runs**
+   (the launch file's own `$(find interbotix_xslocobot_descriptions)` is
+   resolved at parse time, so this can't be set from inside the launch file):
+   - `reference/interbotix_xslocobot_descriptions` (the robot mesh/URDF,
+     copied in for this)
+   - `/opt/ros/galactic/share` (`irobot_create_description` — the Create3
+     base's own meshes live in this *separate* package; on this laptop it's
+     already present as a ROS2 Galactic `.deb` from earlier bridge setup
+     work, and plain directory-based ROS1 `rospack` resolves it fine
+     without any ROS2 tooling being invoked)
+
+```bash
+conda deactivate   # skip if you're not in a conda env
+source /opt/ros/noetic/setup.bash
+export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:/path/to/Unexplored_Workspace_Navigation/reference:/opt/ros/galactic/share
+
+roslaunch /path/to/Unexplored_Workspace_Navigation/uan_ws/src/uan_base_control/launch/uan_sim_navigate.launch \
+  map_file:=/path/to/Unexplored_Workspace_Navigation/uan_ws/src/uan_base_control/maps/hall.yaml
+```
+
+Launched by direct file path (not `roslaunch uan_base_control ...`) since
+it doesn't need `uan_ws` built/sourced — everything it uses (`map_server`,
+`move_base`, `tf2_ros`, `robot_state_publisher`) is a plain ROS package.
+`map_file` is required (no default) since this launch is meant to be run
+from any checkout location. Use `$HOME/...`, not `~/...`, for the
+`map_file:=` value — a bare `~` after `:=` isn't shell-expanded, only one
+at the very start of an argument is.
+
+rviz opens automatically (`use_rviz:=true` by default). Add displays:
+- **Map** on `/map`
+- **RobotModel** (Robot Description: `robot_description`, the default —
+  no namespace override needed here, unlike the real-robot launches)
+- **Path** on `/move_base/NavfnROS/plan` — the full route from start to
+  goal, published once per goal. Add a second **Path** on
+  `/move_base/TrajectoryPlannerROS/global_plan` too if you also want to see
+  what the local controller is currently tracking — that one gets pruned
+  as the robot advances, so it visually shrinks over time instead of
+  staying as one full line the way `NavfnROS/plan` does
+
+The robot starts at map-frame `(0, 0)`. Click **2D Nav Goal** to set a
+destination — `move_base` plans, and `fake_base_sim.py` (a small dead-
+reckoning integrator) drives the robot mesh there by integrating
+`move_base`'s `/cmd_vel` output, so it visibly moves along the path rather
+than just showing a static line.
+
+`2D Pose Estimate` clicks still do nothing here — nothing subscribes to
+`initialpose`, since there's no real localization system (see the
+`fake_localization` dead-end noted in changes.md). The robot always starts
+at `(0, 0)`; to change that, edit the `map_to_odom` `static_transform_publisher`
+args in `uan_sim_navigate.launch`.
+
+**No collision checking** — `fake_base_sim.py` just integrates velocity,
+it doesn't know where the mapped walls are. It'll happily drive straight
+through them if a goal or an aggressive local-planner detour sends it
+there. Fine for tracing/demoing a path, not a real physics sim.
+
 ## Camera pan/tilt
 
 The RealSense's pan/tilt mount is a normal Interbotix joint group, moved

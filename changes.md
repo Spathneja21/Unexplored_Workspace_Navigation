@@ -617,3 +617,220 @@ namespaced under `/locobot` here — flagged to verify rather than assumed.
 Whether `2D Pose Estimate`/`2D Nav Goal` actually work with rviz's default
 (unnamespaced) topics against this launch hasn't been confirmed hands-on —
 called out explicitly in the README rather than assumed.
+
+---
+
+## Step 10 — Laptop-only simulated navigation, no robot (2026-09-11)
+
+### Goal
+A new map (`hall.pgm`) was added, and the ask was to "load the robot model
+in simulation" and "trace the path" in rviz. Clarified with the user first:
+there's no Gazebo/physics simulator in this project, so "simulation" could
+mean either (a) a fully offline, no-hardware path-planning demo, or (b) the
+existing `uan_navigate.launch` pattern just pointed at `hall.yaml` and run
+on the real robot. User chose (a) — laptop-only, no locobot connection.
+
+### Bug found and fixed: hall.yaml
+`hall.yaml`'s `image:` field was `/home/shubham/maps/my_room.pgm` — wrong
+filename (leftover from copying the old yaml) **and** the same
+hardcoded-laptop-path bug fixed for `my_room.yaml` in Step 9. Corrected to
+the bare relative `hall.pgm`.
+
+### Design decision: standalone map_server + static TF + move_base, no interbotix packages
+Checked first (this session runs entirely on the laptop): neither
+`interbotix_xslocobot_nav` (the config package `uan_navigate.launch` reuses)
+nor `interbotix_xslocobot_descriptions` (needed for a `RobotModel` mesh) are
+installed outside the robot's own workspace — confirmed via `rospack find`,
+both fail. So this launch can't reuse the vendor costmap YAMLs or show the
+real robot mesh; both are written out as a deliberate simplification.
+
+Also confirmed the reverse: `uan_ws` isn't built on the laptop (no
+`devel`/`build`), so `roslaunch uan_base_control ...` wouldn't resolve the
+package at all. Solved by launching the file directly by path instead of by
+package name, and making `map_file` a required arg (no default) rather
+than hardcoding a path that would just be this laptop's again.
+
+### Iterated on the fake-position approach after live testing
+First attempt used `fake_localization` + a `rostopic pub` loop publishing a
+constant `/base_pose_ground_truth`, so `2D Pose Estimate` clicks would
+actually work. Tested it directly (this session has Bash access on the
+laptop) and it failed immediately: `rostopic` needs `python3-yaml`, not
+installed here, so the fake odom publisher process died on startup and
+`move_base` timed out waiting for a `map→odom` transform that never came.
+
+Replaced with two `tf2_ros static_transform_publisher` nodes
+(`map→odom→base_footprint`, both identity) — no extra dependency (already
+installed), fully deterministic. Trade-off: the fake robot's position is
+fixed (map-frame `(0,0)`, within `hall.yaml`'s bounds) rather than
+repositionable via `2D Pose Estimate` clicks. Accepted since the actual ask
+was "trace the path," not "test relocalization."
+
+### Files created
+- **`uan_ws/src/uan_base_control/launch/uan_sim_navigate.launch`** —
+  `map_server` (loading `map_file` arg) + 2 static transforms + `move_base`
+  with inline minimal costmap params (global: static + inflation layers;
+  local: inflation layer only, rolling window). `use_rviz` arg, default true.
+
+### Verification performed (directly, via Bash on the laptop)
+- Headless launch (`use_rviz:=false`): clean startup, map loaded at correct
+  dimensions (`212 X 417` matching `hall.pgm`), both costmaps initialize,
+  no errors, no crashed nodes. One harmless cosmetic warning fixed
+  (`static_map` param removed - redundant once `plugins` is set).
+- Sent a goal via `rostopic pub` to `/move_base_simple/goal` (map frame,
+  `(2.0, 2.0)`): `/move_base/status` reported status `1` ("goal accepted"),
+  and `/move_base/TrajectoryPlannerROS/global_plan` published a real path
+  (81 pose points). Confirms the full pipeline — map, TF, costmaps,
+  planner — actually works end to end, not just that nodes start.
+
+### README updated
+New "Simulated navigation (no robot, laptop-only)" section: what
+"simulation" means here (no Gazebo), the launch-by-path command, rviz
+displays to add (`Map` on `/map`, `Path` on
+`/move_base/TrajectoryPlannerROS/global_plan`), and the fixed-start-position
+caveat with how to change it.
+
+---
+
+## Step 11 — Adding the real robot mesh to the sim launch (2026-09-11)
+
+### Goal
+Step 10's `uan_sim_navigate.launch` had no `RobotModel` — no
+`interbotix_xslocobot_descriptions` was available anywhere outside the
+robot's own workspace. User copied that package into `reference/` and
+asked to wire it in.
+
+### Two bugs found and fixed while testing live (this session has Bash
+access on the laptop, so each of these was actually reproduced and
+confirmed fixed, not just reasoned about)
+
+**1. `$(eval ...)` can't be nested inline inside another `$(...)`
+substitution.** First attempt put
+`arm_model:=$(eval 'mobile_' + arg('robot_model').split('_')[1])` directly
+inside the `command="xacro ..."` string alongside `$(find ...)`/`$(arg ...)`
+substitutions. roslaunch rejected it: `Invalid left parenthesis '(' in
+substitution args`. Fixed by extracting it into its own `<arg
+name="arm_model" default="$(eval ...)"/>` first (matching how the vendor's
+own `xslocobot_description.launch` does exactly this), then referencing
+the plain `$(arg arm_model)` inside the command string.
+
+**2. conda shadows `python3`, breaking every pure-Python ROS node.**
+`joint_state_publisher` died on startup with the same
+`ModuleNotFoundError: No module named 'yaml'` seen for `rostopic` in Step
+10 - except this time it couldn't be dodged with a workaround, since a
+real robot mesh needs `joint_state_publisher` to actually publish
+`/joint_states`. Root cause confirmed directly: `which python3` inside
+this session's shell resolves to `~/miniconda3/bin/python3` (the `(base)`
+conda env visible in every prompt this whole session), which has no
+`yaml` module, while `/usr/bin/python3 -c "import yaml"` works fine -
+`dpkg` even shows `python3-yaml` installed, just not for conda's
+interpreter. This is the same class of issue the user's own README
+`## to use the ssh` section already flags with `conda deactivate` for the
+SSH-to-locobot case; it turns out to apply to plain local laptop ROS work
+too. Fixed for testing by stripping `~/miniconda3/{bin,condabin}` from
+`PATH`; documented in the README as `conda deactivate` before sourcing ROS.
+
+### Design decision: resolve irobot_create_description via directory, not by installing/building anything
+The Create3 base's own visual meshes (`body_visual.dae`, `bumper_visual.dae`,
+etc.) live in a separate package, `irobot_create_description`, referenced
+via `package://` URIs inside `locobot_create3.urdf.xacro` - not included in
+what got copied to `reference/`. Not installed as a ROS1/Noetic apt package
+either. It **was** already present as a ROS2 Galactic `.deb`
+(`ros-galactic-irobot-create-description`) from earlier bridge setup work.
+
+Confirmed directly that ROS1's `rospack`/`resource_retriever` resolve it
+correctly just from `/opt/ros/galactic/share` being on `ROS_PACKAGE_PATH` -
+no ROS2 sourcing, no distro mixing, since `rospack` only cares about
+finding a `package.xml` per directory, not which ROS version installed it.
+Avoided the heavier alternatives (installing a ROS1 build of
+`irobot_create_description` from source, or building a whole new catkin
+workspace) since this one-directory addition already fully worked.
+
+### Files changed
+- **`uan_ws/src/uan_base_control/launch/uan_sim_navigate.launch`** — added
+  `robot_description` param (xacro command against
+  `interbotix_xslocobot_descriptions/urdf/locobot.urdf.xacro`),
+  `joint_state_publisher` and `robot_state_publisher` nodes. Renamed the
+  static transforms and move_base's frame params from bare `odom`/
+  `base_footprint` to `locobot/odom`/`locobot/base_footprint` to match the
+  URDF's baked-in `robot_name` prefix (the two would otherwise be
+  disconnected TF trees).
+
+### Verification performed (all directly, via Bash on the laptop)
+- `xacro` generation of `locobot.urdf.xacro` (arm_model=mobile_wx200,
+  base_model=create3) succeeds cleanly; `check_urdf` on the output shows a
+  complete, correctly-nested link tree (`locobot/base_footprint` down
+  through the arm, gripper, wheels, etc.).
+- Headless launch: all 6 nodes (`map_server`, both static transforms,
+  `move_base`, `joint_state_publisher`, `robot_state_publisher`) start and
+  stay alive - no crashes, no errors beyond the pre-existing harmless
+  `meter_scoring` cosmetic warning.
+- `rosrun tf tf_echo map locobot/base_link` resolves cleanly (identity
+  transform) - confirms the full TF chain connects: `map` → my static
+  transforms → the URDF's own internal tree. Not two disconnected trees.
+- `/joint_states` is actively publishing (non-zero, incrementing `seq`).
+
+Mesh *rendering* itself wasn't visually confirmed (no display available in
+this session) - only that every prerequisite for it (`robot_description`
+valid, TF connected, `package://` paths resolvable) checks out.
+
+### README updated
+"Simulated navigation" section rewritten: added the `RobotModel` display
+instruction, and a new "Two known machine-specific gotchas" block
+up-front (conda/python3-yaml, the two required `ROS_PACKAGE_PATH`
+entries) - both are the kind of silent, non-obvious failure worth
+front-loading rather than letting someone rediscover them. Also fixed a
+`~` vs `$HOME` shell-expansion mistake from earlier in this session's own
+example command (`~` only expands at the very start of a shell word, not
+after `map_file:=`).
+
+---
+
+## Step 12 — Actually driving the fake robot to a goal (2026-09-11)
+
+### Goal
+After Step 11 added the robot mesh, `2D Nav Goal` clicks still didn't move
+anything — by design, `odom_to_base_footprint` was a **static** transform,
+so `move_base` could plan and publish a path but nothing consumed its
+`/cmd_vel` output to actually move the mesh. User wanted to see it drive.
+
+### Design decision: a small dead-reckoning integrator, not a real physics sim
+Added `fake_base_sim.py`: subscribes to `/cmd_vel`, integrates linear/
+angular velocity into a pose at 20 Hz, and broadcasts that as the
+`locobot/odom → locobot/base_footprint` transform (replacing the static
+one from Step 10/11 — `map → locobot/odom` stays static, no localization
+drift being simulated). No collision checking - it'll drive straight
+through mapped walls if told to, same as any pure dead-reckoning sim
+without a real robot/physics engine underneath. Explicitly out of scope:
+this is for tracing/demoing a path, not testing collision avoidance.
+
+Considered and rejected: pulling in a real 2D physics/robot simulator
+(stdr_simulator, stage_ros) for actual collision-aware simulation - bigger
+dependency and setup for a want that was "make it move to show the path,"
+not "simulate physical interaction with the map."
+
+### Files changed
+- **`uan_ws/src/uan_base_control/scripts/fake_base_sim.py`** (new) — the
+  integrator described above. Plain `rospy`/`tf2_ros`, no new dependency.
+- **`uan_ws/src/uan_base_control/launch/uan_sim_navigate.launch`** —
+  replaced the static `odom_to_base_footprint` node with `fake_base_sim`.
+  Since this launch runs without `uan_ws` built (Step 10's design), also
+  needed `uan_ws/src` added to the required `ROS_PACKAGE_PATH` list so
+  `$(find uan_base_control)` resolves — no `catkin_make` needed for a pure
+  Python script, just `rospack` being able to find the package directory.
+- **`uan_ws/src/uan_base_control/CMakeLists.txt`** / **`package.xml`** —
+  registered the new script for the real robot's catkin build too
+  (`catkin_install_python`, `tf2_ros` exec_depend).
+
+### Verification performed (directly, via Bash on the laptop)
+- Checked `locobot/odom → locobot/base_footprint` before sending a goal:
+  `(0, 0, 0)`.
+- Sent a goal at map `(2.0, 2.0)`, waited 5s.
+- Re-checked the same transform: `(2.006, 1.899, 0)` — the fake robot
+  actually drove to within a few cm of the goal, not just computed a path.
+- No errors, no crashed nodes.
+
+### README updated
+"Simulated navigation" section: goal-driving now described accurately
+(robot moves, not just a static path line), no-collision-checking caveat
+added, and the stale "fixed robot" / "nothing physically moves" language
+from Step 10 removed.

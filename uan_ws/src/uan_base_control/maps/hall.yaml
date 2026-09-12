@@ -1,4 +1,4 @@
-image: /home/shubham/maps/my_room.pgm
+image: hall.pgm
 resolution: 0.050000
 origin: [-4.454435, -5.901995, 0.000000]
 negate: 0

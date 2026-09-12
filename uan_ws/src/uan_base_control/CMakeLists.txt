@@ -12,6 +12,7 @@ catkin_package()
 catkin_install_python(PROGRAMS
   scripts/velocity_publisher.py
   scripts/teleop_keyboard.py
+  scripts/fake_base_sim.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
