@@ -1,0 +1,104 @@
+<launch>
+  <!--
+    UAN sim navigate: no robot, no locobot connection - trace move_base's
+    planned path on a saved map, entirely on the machine running this
+    launch (laptop or otherwise).
+
+    Runs standalone: map_server + a static map->locobot/odom transform +
+    fake_base_sim.py (integrates move_base's /cmd_vel into a moving
+    locobot/odom->locobot/base_footprint transform, so the robot actually
+    drives to a clicked goal instead of sitting fixed) + the real robot
+    mesh (via interbotix_xslocobot_descriptions, added to reference/) +
+    move_base (global planner only - no lidar/depth sensors exist here, so
+    obstacle avoidance only sees whatever's baked into the static map, and
+    fake_base_sim.py has no collision checking - it'll drive through
+    mapped walls same as any dead-reckoning-only sim would).
+
+    Tried fake_localization + a `rostopic pub` fake ground-truth feed first
+    so "2D Pose Estimate" clicks would work interactively - dropped it after
+    testing: this machine's `rostopic` needs python3-yaml, which isn't
+    installed, so the fake odom publisher died immediately and move_base
+    never got a map->odom transform. `2D Pose Estimate` still does nothing
+    useful here for the same reason (nothing subscribes to `/initialpose`) -
+    the robot always starts at map-frame (0,0), within hall.yaml's bounds.
+
+    Deliberately does NOT use interbotix_xslocobot_nav's move_base config -
+    that package only exists on the robot's workspace, not on a plain
+    laptop ROS install. Costmap params here are inline and minimal instead.
+
+    Robot mesh: interbotix_xslocobot_descriptions was added to reference/
+    for this. Its create3 base meshes live in a SEPARATE package
+    (irobot_create_description) not included there - on this laptop it's
+    already present as the ROS2 Galactic .deb (from earlier bridge setup),
+    and ROS1's rospack resolves it fine by directory alone (it only needs
+    a package.xml, no ROS2 tooling gets invoked). Both packages must be on
+    ROS_PACKAGE_PATH *before* roslaunch runs, since $(find ...) below is
+    resolved at launch-parse time - see the run command below. Same reason
+    uan_ws/src needs to be on it too, for $(find uan_base_control) to
+    locate fake_base_sim.py - no catkin_make needed for a pure Python
+    script, just rospack being able to find the package directory.
+
+    Launch (exports ROS_PACKAGE_PATH, then launches by file path so it
+    works without building/sourcing uan_ws):
+      export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:/path/to/Unexplored_Workspace_Navigation/reference:/opt/ros/galactic/share:/path/to/Unexplored_Workspace_Navigation/uan_ws/src
+      roslaunch /path/to/uan_sim_navigate.launch map_file:=/path/to/hall.yaml
+  -->
+
+  <arg name="map_file"/>  <!-- required, e.g. .../uan_base_control/maps/hall.yaml -->
+  <arg name="robot_model" default="locobot_wx200"/>
+  <arg name="robot_name"  default="locobot"/>
+  <arg name="base_type"   default="create3"/>
+  <arg name="arm_model"   default="$(eval 'mobile_' + arg('robot_model').split('_')[1])"/>
+  <arg name="use_rviz"    default="true"/>
+
+  <param name="robot_description" command="xacro $(find interbotix_xslocobot_descriptions)/urdf/locobot.urdf.xacro
+                                            arm_model:=$(arg arm_model)
+                                            base_model:=$(arg base_type)
+                                            robot_model:=$(arg robot_model)
+                                            robot_name:=$(arg robot_name)
+                                            show_lidar:=true
+                                            show_gripper_bar:=true
+                                            show_gripper_fingers:=true
+                                            external_urdf_loc:="/>
+
+  <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher"/>
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/>
+
+  <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/>
+
+  <!-- fake robot starts at map-frame (0,0) - within hall.yaml's bounds.
+       Edit this to change the starting position. -->
+  <node name="map_to_odom" pkg="tf2_ros" type="static_transform_publisher"
+        args="0 0 0 0 0 0 map $(arg robot_name)/odom"/>
+
+  <node name="fake_base_sim" pkg="uan_base_control" type="fake_base_sim.py">
+    <param name="odom_frame" value="$(arg robot_name)/odom"/>
+    <param name="base_frame" value="$(arg robot_name)/base_footprint"/>
+  </node>
+
+  <node name="move_base" pkg="move_base" type="move_base" output="screen">
+    <rosparam subst_value="true">
+      footprint: [[-0.2, -0.2], [-0.2, 0.2], [0.2, 0.2], [0.2, -0.2]]
+      global_costmap:
+        global_frame: map
+        robot_base_frame: $(arg robot_name)/base_footprint
+        plugins:
+          - {name: static_layer,    type: "costmap_2d::StaticLayer"}
+          - {name: inflation_layer, type: "costmap_2d::InflationLayer"}
+        inflation_layer: {inflation_radius: 0.3, cost_scaling_factor: 5.0}
+      local_costmap:
+        global_frame: $(arg robot_name)/odom
+        robot_base_frame: $(arg robot_name)/base_footprint
+        rolling_window: true
+        width: 4.0
+        height: 4.0
+        resolution: 0.05
+        plugins:
+          - {name: inflation_layer, type: "costmap_2d::InflationLayer"}
+        inflation_layer: {inflation_radius: 0.3, cost_scaling_factor: 5.0}
+    </rosparam>
+  </node>
+
+  <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" args="-f map"/>
+
+</launch>

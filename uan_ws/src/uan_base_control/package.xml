@@ -11,6 +11,7 @@
   <exec_depend>rospy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
   <exec_depend>interbotix_xslocobot_control</exec_depend>
 
   <export/>
