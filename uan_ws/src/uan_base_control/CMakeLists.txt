@@ -13,6 +13,12 @@ catkin_install_python(PROGRAMS
   scripts/velocity_publisher.py
   scripts/teleop_keyboard.py
   scripts/fake_base_sim.py
+  scripts/cloud_stats.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(PROGRAMS
+  scripts/export_3d_map.sh
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
