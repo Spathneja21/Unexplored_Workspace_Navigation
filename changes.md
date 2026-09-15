@@ -834,3 +834,242 @@ not "simulate physical interaction with the map."
 (robot moves, not just a static path line), no-collision-checking caveat
 added, and the stale "fixed robot" / "nothing physically moves" language
 from Step 10 removed.
+
+---
+
+## Step 13 — Plan: 3D mapping with the depth camera (2026-09-15)
+
+### Goal
+Build a 3D map of the workspace with the RealSense, the way Step 3 built a 2D
+map with the lidar. **This step is planning only — no code or config changed.**
+
+### Platform facts established
+
+| Item | Value |
+| --- | --- |
+| Camera | RealSense **D435** (vendor `interbotix_ros_xslocobots/README.md:29`) |
+| Camera connected now? | **No** — no `8086:*` USB device, no `/dev/video*`. (`8087:0026` is Intel Bluetooth, not the camera) |
+| Lidar connected now? | **No** — `/dev/rplidar` absent; `/dev/ttyUSB0` is the U2D2 (FTDI `0403:6014`) |
+| USB 3 available | Yes — buses 2 and 4 are 10000M root hubs |
+| rtabmap | `0.21.10`, linked against **liboctomap 1.9**, GTSAM, g2o, `pcl_io_ply` |
+| rtabmap 3D outputs | `octomap_full`, `octomap_binary` topics; `rtabmap-export`, `rtabmap-databaseViewer` CLI tools installed |
+| `octomap_server` | not installed (not required — rtabmap builds the OctoMap itself) |
+| realsense2_camera | `2.3.2`, librealsense `2.50.0` |
+| NUC compute | 12 threads, 15 GiB RAM, Intel iGPU only (**no CUDA**) |
+
+### Key finding 1: 3D data already exists from the lidar runs
+`uan_slam.launch` wraps `xslocobot_nav.launch`, which hardcodes
+`use_camera:=true`. So every lidar SLAM run also recorded RGB-D frames.
+`rtabmap-info ~/.ros/rtabmap.db` (last written 2026-09-12):
+
+- 2 sessions, 208 nodes, 15.6 m of odometry, 208 s
+- **Depth images 46 MB, RGB images 10 MB** stored
+
+A 3D point cloud can be regenerated from those stored depth images with
+`rtabmap-export` today, with no robot or camera attached.
+
+### Key finding 2: the current SLAM config makes the *live* 3D map flat
+The same DB shows `Grid/Sensor = 0` (laser). In rtabmap 0.21.10
+`Grid/Sensor` is `0=laser, 1=depth, 2=both`, and the vendor's
+`--Grid/FromDepth false` is the legacy spelling of `Grid/Sensor 0`. rtabmap
+builds its OctoMap from each node's local grid, so under this config the live
+OctoMap/cloud is only a slice at lidar height. The depth images are stored but
+not used for the map. **3D mapping needs `Grid/Sensor 2`.**
+
+### Key finding 3: `rtabmap_args` cannot override the vendor flags
+In `xslocobot_nav.launch` the user's `rtabmap_args` is placed **before** the
+hardcoded flags (`default="$(arg rtabmap_args) --RGBD/... --Grid/FromDepth false ..."`).
+A later flag on the command line wins, so passing `--Grid/Sensor 2` through
+`rtabmap_args` would be overridden. The fix is to override the whole
+`rtabmap_default_args` arg from our include. That arg has a `default=`, so an
+including launch file can set it.
+
+### Plan
+
+**Phase 0 — Export 3D from the existing DB (no hardware)**
+1. Back up `~/.ros/rtabmap.db` first. Every SLAM run appends to or rewrites it;
+   that is how it ended up with 2 sessions, and how Step 9's
+   wrong-map problem started.
+2. `rtabmap-export --cloud --voxel 0.02 --max_range 4 <db>` to get a `.ply`.
+3. View it in `rtabmap-databaseViewer` or in CloudCompare/MeshLab on the laptop.
+4. Pass: a recognisable room with walls at their real height.
+   Watch for: the 2 sessions may not be linked (WM holds 118 of 208 nodes),
+   so the export could show only part of the room or two overlapping copies.
+
+**Phase 1 — Camera hardware bring-up**
+1. Plug the D435 into a USB-3 port with a USB-3 cable.
+2. `lsusb` should show `8086:0b07`, and `lsusb -t` should show it at 5000M.
+   At 480M it has fallen back to USB 2, which leads to dropped frames and
+   `align_depth` failures.
+3. `roslaunch uan_base_control uan_bringup.launch use_camera:=true`, then
+   `rostopic hz` on `/locobot/camera/color/image_raw` and
+   `/locobot/camera/aligned_depth_to_color/image_raw` should both read about 30 Hz.
+
+**Phase 2 — `uan_slam_3d.launch`** (new file, `uan_slam.launch` left untouched)
+- Wrap `xslocobot_nav.launch` and override the full `rtabmap_default_args`.
+- Keep lidar ICP registration (`Reg/Strategy 1`, `Reg/Force3DoF true`) for pose.
+- Set `Grid/Sensor 2` and `Grid/3D true` so the map uses depth as well.
+- Set `Grid/RangeMax 4.0` (D435 depth noise grows with the square of range) and
+  `Grid/CellSize 0.05`.
+- Give each map its own `database_path` (e.g. `~/uan_maps/<name>.db`) and
+  start with a clean database, never `~/.ros/rtabmap.db`.
+- Expose `camera_tilt_angle`. The vendor default of 0.2618 rad (15° down) is
+  suited to obstacles, but a 3D map needs the walls, so try about 0–0.1 rad.
+- Keep a `use_lidar:=false` depth-only fallback. It switches to visual
+  registration, which is weaker in plain, textureless rooms.
+
+**Phase 3 — Mapping run procedure**
+- Drive slower than for 2D mapping: at most 0.1 m/s and 0.3 rad/s. The
+  teleop limits (0.30 / 1.00) are fast enough to blur RGB-D frames.
+- Close loops by returning to the start. At each stop, sweep pan/tilt (Step 8).
+- On the laptop, watch only light topics: `octomap_occupied_space`, or
+  `cloud_map` at low rate. Never subscribe to the raw camera images over WiFi:
+  640×480 colour plus depth at 30 Hz is tens of MB/s.
+
+**Phase 4 — Export and save**
+- `rtabmap-export`: a `.ply` point cloud, plus an optional textured mesh.
+- OctoMap `.bt`: save via `rtabmap-databaseViewer`, or install
+  `octomap_server` to use `octomap_saver`. Which of these to use is still open.
+- Output sizes: 3D clouds and DBs run from tens to hundreds of MB, and GitHub
+  rejects files over 100 MB. `.gitignore` currently has no rules for `*.db`,
+  `*.ply`, `*.pcd` or `*.bt`. The user deliberately stopped ignoring
+  `maps/` and `*.pgm`, so adding rules for 3D files is a decision for the user.
+
+**Phase 5 — Use the map (toward the project goal)**
+- Localization on the saved 3D DB (`localization:=true`).
+- An OctoMap stores free, occupied and **unknown** voxels, and unknown space is
+  exactly what frontier-based exploration of unexplored areas needs.
+
+### Current blockers
+Camera and lidar are both unplugged. Phase 0 is the only phase that can run
+right now.
+
+---
+
+## Step 14 — 3D mapping pipeline built: export tools + `uan_slam_3d.launch` (2026-09-15)
+
+### Goal
+Carry out the Step 13 plan as far as possible without hardware: Phase 0
+(export the existing DB) and Phase 2 (the 3D SLAM launch), plus the export
+tooling Phase 4 needs. Camera and lidar are still unplugged, so Phases 1 and 3
+are not done.
+
+### Correction to Step 13
+Step 13 warned the export could be partial because "the 2 sessions may not be
+linked (WM holds 118 of 208 nodes)". Querying the DB's `Node` table showed
+that is **not** the cause:
+
+| map_id | nodes | note |
+| --- | --- | --- |
+| 0 | 206 (117 normal + 89 intermediate) | the real Sep 12 run |
+| 1 | 2 (1 + 1) | a stub session a day later, negligible |
+
+There are 0 links between sessions, but session 1 holds almost nothing. The
+117-pose export happens because **`rtabmap-export` skips intermediate nodes
+(weight -1)**, even though all 208 nodes store depth, RGB and scan data. So
+about 43% of stored depth frames never reach the cloud. The cloud still covers
+the whole run, so this was not pursued further. It is noted in the export
+script header.
+
+### Phase 0 — done: 3D cloud from the existing database
+1. Backed up `~/.ros/rtabmap.db` to
+   `~/uan_maps/backups/rtabmap_2026-09-12_lidar_slam.db`; `cmp` confirmed it is
+   identical.
+2. Exported with the real flags, checked in `rtabmap-export --help` rather than
+   trusted from memory: `--cloud --poses --decimation 4 --voxel 0.02 --max_range 4`.
+3. Result: 856,593 raw points, **546,345 after 2 cm voxel filtering**, a 17 MB
+   `.ply` file, 1.6 s, 277 MB peak RAM.
+
+Parsed height distribution: the cloud is **really 3D**, with the floor at
+z≈0 and walls rising to 1.5–1.8 m, over about 4 m × 12 m. **Nothing is above
+about 1.8 m**, which fits the vendor's 15° down camera tilt with a 4 m range.
+This supports raising the tilt.
+
+`cmp` after export: `rtabmap-export` does **not** modify the database it
+reads. The export script still uses a temp copy, so it is safe even on a
+database that rtabmap has open.
+
+### New finding: the vendor flags also truncate the 3D map at 0.7 m
+The vendor lidar branch sets `Grid/MaxObstacleHeight 0.7`. rtabmap drops
+points above that height when it builds the grid, and the OctoMap is built
+from that grid. So even with `Grid/Sensor 2`, the live 3D map would stop at
+0.7 m. This is fixed in the new launch.
+
+### Files created
+- **`launch/uan_slam_3d.launch`**: wraps `xslocobot_nav.launch` and replaces the
+  whole `rtabmap_default_args` (for the reason, see Step 13 key finding 3).
+  Relative to the vendor lidar branch it changes:
+  - `Grid/FromDepth false` → `Grid/Sensor 2`, and adds `Grid/3D true`
+  - `Grid/MaxObstacleHeight 0.7` → `2.0` (arg `max_obstacle_height`)
+  - `Grid/RangeMax 0` → `4.0` (arg `grid_range_max`). **Tradeoff:** this also
+    limits the lidar's reach in the 2D grid, so it may need raising in long halls.
+  - Adds `--delete_db_on_start` when `fresh_db:=true` (the default) and
+    `localization:=false`.
+  - Per-map DB at `$HOME/uan_maps/<map_name>.db` instead of `~/.ros/rtabmap.db`.
+  - `camera_tilt_angle` default `0.1` rad (vendor `0.2618`).
+  - Private params on `/locobot/rtabmap/rtabmap`: `cloud_voxel_size 0.05`,
+    `cloud_max_depth 4.0`, `cloud_decimation 4`, so the live `cloud_map` is
+    light enough for WiFi.
+
+  Registration flags (ICP, `Reg/Strategy 1`, `Reg/Force3DoF`) are copied
+  verbatim.
+- **`scripts/export_3d_map.sh`**: exports a DB to cloud and poses (optional
+  `--mesh`, `--voxel`, `--max-range`, `--out-dir`, `--name`) from a `mktemp`
+  copy cleaned up by `trap`, then runs `cloud_stats.py`.
+- **`scripts/cloud_stats.py`**: reads rtabmap binary PLY with numpy only (no
+  open3d, plyfile, pcl_viewer or CloudCompare on the NUC). Prints point count,
+  extents and a height histogram. It warns when the cloud is **flat**
+  (p99−p1 z < 0.3 m, a lidar-only map) or tops out **below 1.8 m** (camera
+  tilted too far down).
+- **`CMakeLists.txt`**: adds `cloud_stats.py` to `catkin_install_python`, and
+  `export_3d_map.sh` via `install(PROGRAMS)`.
+- **README.md**: new "3D mapping (depth camera)" section; layout table
+  mentions `~/uan_maps`.
+
+Nothing was added to `.gitignore`. All 3D outputs are written to `~/uan_maps`,
+outside the repo, which avoids the size problem without reversing the user's
+choice to track `maps/` and `*.pgm`.
+
+### Bug hit and fixed during the step
+The first version of `uan_slam_3d.launch` failed to parse (`not well-formed
+(invalid token): line 26`). The header comment contained flags written with
+their leading double dash, and **XML comments may not contain a double dash**.
+Rewrote that comment without dashes. A localization check that seemed to pass
+before the fix had only "passed" because the file never parsed, so it was
+rerun afterwards.
+
+### Verification performed
+- `catkin_make`: exit 0, `cloud_stats.py` devel wrapper installed.
+- `roslaunch --args /locobot/rtabmap/rtabmap uan_base_control uan_slam_3d.launch`
+  resolves to `Grid/Sensor 2`, `Grid/3D true`, `Grid/MaxObstacleHeight 2.0`,
+  `Grid/RangeMax 4.0`, `Reg/Strategy 1`, and **0** `FromDepth` occurrences.
+  This confirms the full-arg override replaced the vendor flags instead of
+  being overridden by them.
+- `--delete_db_on_start` count: mapping **1**, `localization:=true` **0**,
+  `fresh_db:=false` **0**.
+- `roslaunch --dump-params`: `database_path /home/locobot/uan_maps/room_3d.db`,
+  the three `cloud_*` params land on `/locobot/rtabmap/rtabmap`, and
+  `localization:=true` flips `Mem/IncrementalMemory` to false and
+  `Mem/InitWMWithAllNodes` to true.
+- `camera_tilt` node publishes `cmd: [0, 0.1]`.
+- `roslaunch --nodes`: base, bridge, `rplidarNode`, realsense, `rgbd_sync`,
+  `points_xyzrgb`, `obstacle_detection`, `rtabmap`, `move_base`, `camera_tilt`.
+- `rosrun uan_base_control export_3d_map.sh` resolves (prints usage, exit 1)
+  and exits 1 on a missing DB. A full run on the backup reproduced the Phase 0
+  result exactly (546,345 points) and fired the low-ceiling warning. Afterwards
+  the backup was unchanged and no temp dir was left in `/tmp`.
+
+### Not yet verified (needs camera + lidar connected)
+- The launch runs on hardware. The `cloud_*` param names were confirmed in the
+  `librtabmap_util_plugins.so` strings, but not yet confirmed to take effect at
+  runtime.
+- D435 at 5000M; colour and aligned depth at about 30 Hz.
+- `/locobot/rtabmap/cloud_map` and `octomap_occupied_space` publish and grow
+  in 3D while driving.
+- rtabmap CPU load with 3D ray tracing on the NUC.
+- A first real `uan_slam_3d` export passes `cloud_stats.py` with no flat or
+  low-ceiling warning.
+
+### Still open
+- Saving the OctoMap `.bt` file (Phase 4): the method is still undecided,
+  `rtabmap-databaseViewer` or installing `octomap_server`.

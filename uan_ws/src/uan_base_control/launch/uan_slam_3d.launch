@@ -1,0 +1,99 @@
+<launch>
+  <!--
+    UAN 3D SLAM: builds a 3D map (OctoMap + point cloud) of the workspace with
+    the lidar + RealSense D435.
+
+    Same vendor stack as uan_slam.launch (interbotix_xslocobot_nav/xslocobot_nav.launch),
+    with the rtabmap flags replaced so the depth camera actually feeds the map:
+
+      - Grid/Sensor 2            laser + depth. The vendor's `Grid/FromDepth false`
+                                 is Grid/Sensor 0 (laser only), which leaves the
+                                 OctoMap as a flat slice at lidar height.
+      - Grid/3D true             3D occupancy grid, required for the OctoMap.
+      - Grid/MaxObstacleHeight   vendor sets 0.7 m, which truncates the 3D map at
+                                 0.7 m. Raised, exposed as max_obstacle_height.
+      - Grid/RangeMax            vendor sets 0 (unlimited). D435 depth noise grows
+                                 with range squared, so capped, exposed as
+                                 grid_range_max. This also caps the lidar's
+                                 contribution to the 2D grid - raise it for long
+                                 halls if far walls go missing.
+
+    Registration is unchanged from the vendor lidar branch (ICP on the scan,
+    Reg/Strategy 1, 3DoF) - lidar gives the pose, depth gives the geometry.
+
+    Why the whole rtabmap_default_args is overridden instead of passing
+    rtabmap_args: the vendor places rtabmap_args BEFORE its hardcoded flags, and
+    the later flag wins, so passing Grid/Sensor 2 through rtabmap_args gets
+    silently overridden by its hardcoded Grid/FromDepth false.
+    (Flags are written without their leading dashes in this comment: XML
+    comments may not contain a double dash.)
+
+    Each map gets its own database (map_name) that is wiped at start, never the
+    shared ~/.ros/rtabmap.db (see changes.md Step 9 for what reusing it caused).
+    The directory must exist: mkdir -p ~/uan_maps
+  -->
+
+  <arg name="robot_model"         default="locobot_wx200"/>
+  <arg name="robot_name"          default="locobot"/>
+  <arg name="use_rviz"            default="false"/>
+
+  <arg name="map_name"            default="room_3d"/>
+  <arg name="database_path"       default="$(env HOME)/uan_maps/$(arg map_name).db"/>
+  <!-- true = start a new map. Ignored (never wipes) when localization:=true. -->
+  <arg name="fresh_db"            default="true"/>
+  <arg name="localization"        default="false"/>
+
+  <!-- 0 = level. Vendor default 0.2618 (15 deg down) misses the upper walls. -->
+  <arg name="camera_tilt_angle"   default="0.1"/>
+
+  <arg name="grid_cell_size"      default="0.05"/>
+  <arg name="grid_range_max"      default="4.0"/>
+  <arg name="max_obstacle_height" default="2.0"/>
+
+  <!-- Live cloud_map published for viewing. Kept coarse so it survives WiFi. -->
+  <arg name="cloud_voxel_size"    default="0.05"/>
+  <arg name="cloud_max_depth"     default="4.0"/>
+
+  <arg name="db_flag" value="$(eval '--delete_db_on_start' if (arg('fresh_db') and not arg('localization')) else '')"/>
+
+  <!-- Vendor lidar-branch flags verbatim, except the Grid/* lines noted above. -->
+  <arg name="rtabmap_3d_args" value="$(arg db_flag)
+                                     --RGBD/NeighborLinkRefining true
+                                     --RGBD/ProximityBySpace true
+                                     --RGBD/ProximityPathMaxNeighbors 10
+                                     --RGBD/AngularUpdate 0.01
+                                     --RGBD/LinearUpdate 0.01
+                                     --RGBD/LocalRadius 5
+                                     --RGBD/OptimizeFromGraphEnd false
+                                     --Grid/Sensor 2
+                                     --Grid/3D true
+                                     --Grid/CellSize $(arg grid_cell_size)
+                                     --Grid/MaxObstacleHeight $(arg max_obstacle_height)
+                                     --Grid/RayTracing true
+                                     --Grid/RangeMax $(arg grid_range_max)
+                                     --Reg/Force3DoF true
+                                     --Reg/Strategy 1
+                                     --Mem/STMSize 30
+                                     --Icp/VoxelSize 0.05
+                                     --Icp/CorrespondenceRatio 0.4
+                                     --Icp/MaxCorrespondenceDistance 0.1"/>
+
+  <!-- Private params of the vendor's /<robot_name>/rtabmap/rtabmap node. -->
+  <group ns="$(arg robot_name)/rtabmap/rtabmap">
+    <param name="cloud_voxel_size"  value="$(arg cloud_voxel_size)"/>
+    <param name="cloud_max_depth"   value="$(arg cloud_max_depth)"/>
+    <param name="cloud_decimation"  value="4"/>
+  </group>
+
+  <include file="$(find interbotix_xslocobot_nav)/launch/xslocobot_nav.launch">
+    <arg name="robot_model"          value="$(arg robot_model)"/>
+    <arg name="robot_name"           value="$(arg robot_name)"/>
+    <arg name="use_lidar"            value="true"/>
+    <arg name="use_rviz"             value="$(arg use_rviz)"/>
+    <arg name="localization"         value="$(arg localization)"/>
+    <arg name="database_path"        value="$(arg database_path)"/>
+    <arg name="camera_tilt_angle"    value="$(arg camera_tilt_angle)"/>
+    <arg name="rtabmap_default_args" value="$(arg rtabmap_3d_args)"/>
+  </include>
+
+</launch>

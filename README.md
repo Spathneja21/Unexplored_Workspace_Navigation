@@ -10,7 +10,8 @@ Every step of this project is logged in [changes.md](changes.md).
 | Path | What it is |
 | --- | --- |
 | `uan_ws/` | Our catkin workspace — all project code lives here |
-| `uan_ws/src/uan_base_control/` | Base bringup + velocity control (Step 1), SLAM mapping (Step 3) |
+| `uan_ws/src/uan_base_control/` | Base bringup + velocity control (Step 1), SLAM mapping (Step 3), 3D mapping (Step 14) |
+| `~/uan_maps/` (outside repo) | 3D map databases, `backups/`, `exports/` (clouds are tens of MB) |
 | `reference/` | Read-only copies of vendor files from `interbotix_ros_rovers` |
 
 `reference/` is **not** a catkin source tree. The Interbotix packages are used
@@ -97,6 +98,71 @@ rosrun map_server map_saver -f ~/maps/my_room map:=/locobot/rtabmap/grid_map
 `maps/` is gitignored (see changes.md Step 2) - the `.pgm`/`.yaml` pair are
 run artifacts, save them outside the repo (as above) or use `git add -f` if
 one needs to be committed as a reference map.
+
+## 3D mapping (depth camera)
+
+Builds a 3D map (OctoMap + coloured point cloud) with the lidar for pose and
+the RealSense D435 for geometry. Replaces `uan_slam.launch` for the session -
+don't run both. See changes.md Steps 13-14 for why it differs from the 2D
+launch (short version: the vendor flags build the "3D" map from the lidar
+only, and cap it at 0.7 m).
+
+**Before the first run:** the D435 must be on a USB-3 port - `lsusb -t`
+should show it at `5000M`, not `480M`.
+
+**Terminal 1 — map:**
+
+```bash
+mkdir -p ~/uan_maps
+source /home/locobot/UAN/Unexplored_Workspace_Navigation/uan_ws/devel/setup.bash
+ROS_IP=<nuc wifi ip> roslaunch uan_base_control uan_slam_3d.launch map_name:=my_room_3d
+```
+
+Each `map_name` is its own database, `~/uan_maps/<map_name>.db`, and is
+**wiped at launch** so every run starts clean. To add to an existing map
+instead, pass `fresh_db:=false`.
+
+Useful args: `camera_tilt_angle` (default `0.1` rad; vendor's `0.2618` misses
+the upper walls), `grid_range_max` (default `4.0` m - also limits the lidar
+in the 2D grid, raise it in long halls), `max_obstacle_height` (default `2.0`).
+
+**Terminal 2 — drive slowly:** ≤ 0.1 m/s and ≤ 0.3 rad/s, faster blurs the
+RGB-D frames. Finish back where you started so rtabmap can close the loop.
+At stops, sweep the camera (see Camera pan/tilt below).
+
+```bash
+rosrun uan_base_control velocity_publisher.py -x 0.08 -t 5
+```
+
+**Watching it on the laptop:** add **PointCloud2** on
+`/locobot/rtabmap/cloud_map` (5 cm voxels) or **MarkerArray** on
+`/locobot/rtabmap/octomap_occupied_space`. Never add the raw camera image
+topics over WiFi - colour + depth at 30 Hz is tens of MB/s.
+
+**Export** after stopping the launch (Ctrl-C saves the database):
+
+```bash
+rosrun uan_base_control export_3d_map.sh ~/uan_maps/my_room_3d.db
+rosrun uan_base_control export_3d_map.sh ~/uan_maps/my_room_3d.db --mesh --voxel 0.01
+```
+
+Writes `~/uan_maps/exports/<name>_cloud.ply` and `<name>_poses.txt` (plus
+`_mesh.ply` with `--mesh`), then prints a height check. It exports from a
+temporary copy, so the database is never modified. Open the `.ply` in
+CloudCompare or MeshLab on the laptop.
+
+Check any cloud without a GUI:
+
+```bash
+rosrun uan_base_control cloud_stats.py ~/uan_maps/exports/my_room_3d_cloud.ply
+```
+
+It warns if the cloud is flat (built from the lidar only) or tops out below
+1.8 m (camera tilted too far down).
+
+`~/uan_maps` is outside the repo on purpose: a 12 m hall exports to 17 MB at
+2 cm voxels, and databases run to hundreds of MB (GitHub rejects files over
+100 MB).
 
 ## Viewing rviz on your laptop (not over SSH -X)
 
