@@ -1073,3 +1073,88 @@ rerun afterwards.
 ### Still open
 - Saving the OctoMap `.bt` file (Phase 4): the method is still undecided,
   `rtabmap-databaseViewer` or installing `octomap_server`.
+
+---
+
+## Step 15 — ROS 2 Galactic port: `uan_base_control_ros2` (2026-09-17)
+
+### Goal
+The LoCoBot also runs ROS 2 Galactic natively (the Create3 base's own stack;
+`bridge.yaml` already showed its topics are plain ROS 2 messages under the
+hood). Port the full `uan_base_control` functionality — base teleop, 2D
+SLAM, 3D SLAM, saved-map navigation, and the laptop-only sim/navigate demo —
+to a native Galactic package, instead of only reaching the base through
+`ros1_bridge`.
+
+### Written from the laptop, no SSH access to the robot this session
+Same constraint as several earlier steps (e.g. Step 3, Step 11) — everything
+here is code-complete and syntax-checked (`python3 -m py_compile` on every
+node and launch file) but **not yet run against the robot's actual Galactic
+install**. The new package's own README has a numbered "Port notes" section
+listing exactly what to verify first; not duplicated here.
+
+### Design decision: separate package + separate workspace, not the same `uan_base_control`
+A ROS 1 catkin package and a ROS 2 ament package can't share one name in a
+workspace that might be built by either `catkin_make` or `colcon build` —
+neither tool understands the other's manifest. New package is named
+`uan_base_control_ros2`, still placed under this repo's `uan_ws/src/` (so
+the two versions sit side by side for reference), but documented as needing
+its own colcon workspace on the robot (e.g. `~/uan_ros2_ws/src/`) rather
+than being built together with the existing catkin `uan_ws`.
+
+### What ported directly vs. what changed
+- **Base control (`velocity_publisher.py`, `teleop_keyboard.py`,
+  `fake_base_sim.py`, `cloud_stats.py`, `export_3d_map.sh`)**: near
+  line-for-line ports (`rclpy` instead of `rospy`; `cloud_stats.py` and
+  `export_3d_map.sh` are unchanged, since neither has a ROS dependency).
+  Talks to `/mobile_base/cmd_vel`/`/mobile_base/odom` directly — these are
+  native Galactic topics on this robot, so no bridge involved for base
+  control at all, unlike the ROS 1 version.
+- **SLAM (`uan_slam.launch.py`, `uan_slam_3d.launch.py`)**: wrap the
+  Galactic branch of `interbotix_xslocobot_nav`, same wrapping pattern as
+  the ROS 1 launches. The 3D SLAM rtabmap flag overrides (`Grid/Sensor 2`,
+  `Grid/3D true`, etc.) carry over unchanged — these are core `rtabmap`
+  library parameter names, not ROS-version-specific.
+- **Navigation (`uan_navigate.launch.py`)**: replaced the ROS 1
+  map_server+amcl+move_base trio with Nav2's `bringup_launch.py`. Wrote a
+  new `config/nav2_params.yaml` from scratch — the vendor's actual
+  costmap/planner values were never available to port even on the ROS 1
+  side (changes.md Step 3 explicitly didn't copy them), so this is a
+  generic, documented-as-such starting config, not a tuned port.
+- **Sim navigate (`uan_sim_navigate.launch.py`)**: same no-hardware design
+  as the ROS 1 version (map_server + static transform + `fake_base_sim` +
+  robot mesh), using Nav2's `navigation_launch.py` (no AMCL — no real scan
+  to localize against here either way).
+
+### Known unresolved mismatch: topic/frame namespacing
+The ROS 1 stack has an inconsistency inherited from the vendor packages:
+TF frames are prefixed `<robot_name>/...` but `move_base`/`amcl` themselves
+run **unnamespaced**, while the lidar scan is namespaced under
+`/<robot_name>/scan` (this is exactly what Step 9's amcl remap worked
+around). The ROS 2 port assumes the same split and bridges it with two
+`topic_tools relay` nodes (`scan` and `cmd_vel`) since ROS 2 launch can't
+remap a topic on a node defined inside an *included* launch file the way
+roslaunch's `<remap>` could. Flagged as unverified in the new package's
+README — first thing to check once `uan_bringup.launch.py` is confirmed
+working on the robot.
+
+### Files created
+`uan_ws/src/uan_base_control_ros2/` — full ament_python package: `package.xml`,
+`setup.py`/`setup.cfg`, `resource/`, four `rclpy` nodes, five `.launch.py`
+files, `config/base_params.yaml` + `config/nav2_params.yaml`,
+`maps/{hall,my_room}.{pgm,yaml}` (copied as-is — the map YAML format is
+identical between ROS 1 `map_server` and ROS 2 `nav2_map_server`),
+`scripts/export_3d_map.sh`, and its own `README.md`.
+
+### Verification performed
+- `python3 -m py_compile` on every node script and launch file — all clean.
+- No hardware, no ROS 2 install available in this session — nothing beyond
+  syntax has been checked. Every vendor-package assumption (launch file
+  names/args for `interbotix_xslocobot_control`/`interbotix_xslocobot_nav`,
+  whether `nav2_bringup` is installed, frame/topic namespacing) is listed
+  as unverified in the package README rather than asserted.
+
+### Still open
+Everything under "Port notes" in `uan_ws/src/uan_base_control_ros2/README.md`
+— this is a first draft to build and iterate on directly on the robot, the
+same way the ROS 1 stack was hardened over Steps 1–14.

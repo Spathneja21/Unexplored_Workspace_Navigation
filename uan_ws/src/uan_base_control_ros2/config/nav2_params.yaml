@@ -1,0 +1,217 @@
+# Nav2 params for uan_navigate.launch.py - the ROS 2 Galactic equivalent of
+# the ROS 1 move_base + amcl stack in uan_navigate.launch.
+#
+# PORT NOTE: the ROS 1 launch loaded the vendor's own costmap/planner yamls
+# from interbotix_xslocobot_nav (local_costmap_all_params.yaml,
+# global_costmap_all_params.yaml, common_costmap_params.yaml,
+# local_planner_params.yaml, global_planner_params.yaml,
+# move_base_params.yaml) - and changes.md Step 3 notes those were never even
+# copied into reference/, so their exact values aren't available here to
+# port 1:1. This file is a standard Nav2 starting configuration (DWB local
+# controller, NavFn global planner, obstacle+inflation local costmap,
+# static+obstacle+inflation global costmap) sized for a LoCoBot-class
+# footprint. Treat it as a working default to tune against the real vendor
+# values (or by driving) rather than an exact port - see README.md.
+#
+# `<robot_name>` is substituted at launch time (nav2_bringup's RewrittenYaml
+# pattern) with the `robot_name` launch argument, matching the ROS 1
+# launch's `$(arg robot_name)/base_footprint` style overrides.
+
+amcl:
+  ros__parameters:
+    use_sim_time: false
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "<robot_name>/base_footprint"
+    odom_frame_id: "<robot_name>/odom"
+    global_frame_id: "map"
+    scan_topic: scan
+    # the Create3's ROS1<->ROS2 bridge (when bridging is in the loop at all)
+    # adds a few ms of jitter to odom/tf delivery; ROS 1's uan_navigate.launch
+    # gave amcl the same slack via transform_tolerance.
+    transform_tolerance: 0.5
+    set_initial_pose: false
+    tf_broadcast: true
+
+amcl_map_client:
+  ros__parameters:
+    use_sim_time: false
+
+amcl_rclcpp_node:
+  ros__parameters:
+    use_sim_time: false
+
+map_server:
+  ros__parameters:
+    use_sim_time: false
+    yaml_filename: ""   # set via the map launch argument, not here
+
+map_saver:
+  ros__parameters:
+    use_sim_time: false
+
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    odom_topic: /mobile_base/odom
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugin: "goal_checker"
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 0.25
+      stateful: true
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      # velocity limits match config/base_params.yaml / velocity_publisher.py
+      max_vel_x: 0.30
+      min_vel_x: 0.0
+      max_vel_theta: 1.00
+      min_vel_theta: -1.00
+      acc_lim_x: 1.0
+      acc_lim_theta: 2.0
+      decel_lim_x: -1.0
+      decel_lim_theta: -2.0
+      vx_samples: 20
+      vtheta_samples: 40
+      sim_time: 1.5
+      trans_stopped_velocity: 0.05
+      short_circuit_trajectory_evaluation: true
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      GoalAlign.scale: 24.0
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: "<robot_name>/odom"
+      robot_base_frame: "<robot_name>/base_footprint"
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      rolling_window: true
+      width: 4
+      height: 4
+      resolution: 0.05
+      footprint: "[[-0.2, -0.2], [-0.2, 0.2], [0.2, 0.2], [0.2, -0.2]]"
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.3
+      always_send_full_costmap: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: map
+      robot_base_frame: "<robot_name>/base_footprint"
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      resolution: 0.05
+      footprint: "[[-0.2, -0.2], [-0.2, 0.2], [0.2, 0.2], [0.2, -0.2]]"
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.3
+      always_send_full_costmap: true
+
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+# Galactic names this node/plugin set "recoveries_server" (nav2_recoveries) -
+# later distros (Humble+) renamed it to behavior_server/nav2_behaviors. Keep
+# the Galactic name here since that's the target distro.
+recoveries_server:
+  ros__parameters:
+    use_sim_time: false
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    recovery_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_recoveries/Spin"
+    backup:
+      plugin: "nav2_recoveries/BackUp"
+    wait:
+      plugin: "nav2_recoveries/Wait"
+    global_frame: "<robot_name>/odom"
+    robot_base_frame: "<robot_name>/base_footprint"
+    transform_tolerance: 0.5
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.00
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 2.0
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: "<robot_name>/base_footprint"
+    odom_topic: /mobile_base/odom
+    transform_tolerance: 0.5
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: false
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      waypoint_pause_duration: 200
+
+# Nav2 Galactic's bt_navigator publishes cmd_vel straight from the
+# controller_server (no velocity_smoother/collision_monitor nodes - those
+# were added in later distros), so controller_server's own output topic is
+# remapped to /mobile_base/cmd_vel directly in uan_navigate.launch.py.

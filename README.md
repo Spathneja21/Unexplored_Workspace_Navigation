@@ -11,6 +11,7 @@ Every step of this project is logged in [changes.md](changes.md).
 | --- | --- |
 | `uan_ws/` | Our catkin workspace — all project code lives here |
 | `uan_ws/src/uan_base_control/` | Base bringup + velocity control (Step 1), SLAM mapping (Step 3), 3D mapping (Step 14) |
+| `uan_ws/src/uan_base_control_ros2/` | ROS 2 Galactic port of `uan_base_control` (Step 15) — same functionality, for the LoCoBot's native Galactic side. Its own README covers what's ported directly vs. what still needs verifying on the robot. Not built together with the ROS 1 `uan_ws` — see that package's README for why. |
 | `~/uan_maps/` (outside repo) | 3D map databases, `backups/`, `exports/` (clouds are tens of MB) |
 | `reference/` | Read-only copies of vendor files from `interbotix_ros_rovers` |
 

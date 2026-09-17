@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uan_base_control_ros2</name>
+  <version>0.0.1</version>
+  <description>
+    ROS 2 Galactic port of uan_base_control: base velocity control, SLAM and
+    navigation for the Unexplored Area Navigation project (LoCoBot WX200,
+    Create3 base). Talks to the Create3 directly over native ROS 2 topics
+    (no ros1_bridge needed for base control); SLAM/navigation wrap the
+    Galactic branch of the Interbotix xslocobot stack and Nav2.
+  </description>
+  <maintainer email="shubhampathneja123@gmail.com">Shubham Pathneja</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Vendor stacks pulled in by the launch files, not by the Python nodes.
+       Declared exec_depend so `rosdep`/colcon report them, even though this
+       package only *includes* their launch files rather than importing them.
+       See README.md "Port notes" for what to verify on the robot. -->
+  <exec_depend>interbotix_xslocobot_control</exec_depend>
+  <exec_depend>interbotix_xslocobot_nav</exec_depend>
+  <exec_depend>interbotix_xslocobot_descriptions</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_common</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>rtabmap_launch</exec_depend>
+  <exec_depend>topic_tools</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
