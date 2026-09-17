@@ -19,11 +19,11 @@ Every step of this project is logged in [changes.md](changes.md).
 from the already-built `/home/locobot/interbotix_ws`; see changes.md for why.
 
 ## to use the ssh 
-
+```bash
 conda deactivate
 ssh locobot@locobot.local
 cd UAN/Unexplored_Workspace_Navigation/
-
+```
 ## Setup (once per new terminal)
 
 ```bash
@@ -180,12 +180,15 @@ default points to:
 ROS_IP=172.27.244.85 roslaunch uan_base_control uan_slam.launch
 ```
 
+ROS_IP=10.160.92.85 roslaunch uan_base_control uan_navigate.launch map_file:=$(pwd)/uan_ws/src/uan_base_control/maps/hall.yaml
+
+
 **On the laptop** (requires `ros-noetic-rviz` installed locally):
 
 ```bash
 source /opt/ros/noetic/setup.bash
 export ROS_MASTER_URI=http://locobot.local:11311
-export ROS_IP=172.27.244.134
+export ROS_IP=10.160.92.134
 rostopic list         
 rosrun rviz rviz -f map
 ```
